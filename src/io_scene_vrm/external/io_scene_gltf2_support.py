@@ -1,19 +1,15 @@
 # SPDX-License-Identifier: MIT OR GPL-3.0-or-later
 import dataclasses
 import datetime
-import importlib
 import logging
 from collections.abc import Set as AbstractSet
+from typing import Optional
 
 import bpy
-from bpy.types import Context, Event, Image, Operator
+from bpy.types import Context, Event, Image, Material, Operator
+from io_scene_gltf2.io.com import gltf2_io
 
 from ..common.logger import get_logger
-
-#
-# `import io_scene_gltf2` is executed in a function, not here. Importing it in the
-# global scope will result in an error on startup if the glTF Add-on is disabled.
-#
 
 logger = get_logger(__name__)
 
@@ -38,32 +34,42 @@ class WM_OT_vrm_io_scene_gltf2_disabled_warning(Operator):
 def image_to_image_bytes(
     image: Image, export_settings: dict[str, object]
 ) -> tuple[bytes, str]:
-    if bpy.app.version < (3, 6, 0):
-        gltf2_blender_image = importlib.import_module(
-            "io_scene_gltf2.blender.exp.gltf2_blender_image"
-        )
-    elif bpy.app.version < (4, 3):
-        gltf2_blender_image = importlib.import_module(
-            "io_scene_gltf2.blender.exp.material.extensions.gltf2_blender_image"
-        )
-    else:
-        gltf2_blender_image = importlib.import_module(
-            "io_scene_gltf2.blender.exp.material.encode_image"
-        )
-    export_image = gltf2_blender_image.ExportImage.from_blender_image(image)
-
     mime_type = "image/jpeg" if image.file_format == "JPEG" else "image/png"
 
-    if bpy.app.version < (3, 3, 0):
-        # https://github.com/KhronosGroup/glTF-Blender-IO/blob/518b6466032534c4be4a4c50ca72d37c169a5ebf/addons/io_scene_gltf2/blender/exp/gltf2_blender_image.py
-        return export_image.encode(mime_type), mime_type
+    if bpy.app.version < (3, 6, 0):
+        from io_scene_gltf2.blender.exp.gltf2_blender_image import (
+            ExportImage as ExportImage_Before_3_6,
+        )
 
-    if bpy.app.version < (3, 5, 0):
-        # https://github.com/KhronosGroup/glTF-Blender-IO/blob/b8901bb58fa29d78bc2741cadb3f01b6d30d7750/addons/io_scene_gltf2/blender/exp/gltf2_blender_image.py
-        image_bytes, _specular_color_factor = export_image.encode(mime_type)
+        export_image_before_3_6 = ExportImage_Before_3_6.from_blender_image(image)
+
+        if bpy.app.version < (3, 5, 0):
+            encoded = export_image_before_3_6.encode(mime_type)
+            if isinstance(encoded, bytes):
+                # bpy.app.version < (3, 3, 0)
+                return encoded, mime_type
+            image_bytes, _specular_color_factor = encoded
+            return image_bytes, mime_type
+
+        image_bytes, _specular_color_factor = export_image_before_3_6.encode(
+            mime_type, export_settings
+        )
         return image_bytes, mime_type
 
-    # https://github.com/KhronosGroup/glTF-Blender-IO/blob/e662c281fc830d7ad3ea918d38c6a1881ee143c5/addons/io_scene_gltf2/blender/exp/gltf2_blender_image.py#L139
+    if bpy.app.version < (4, 3):
+        from io_scene_gltf2.blender.exp.material.extensions.gltf2_blender_image import (
+            ExportImage as ExportImage_Before_4_3,
+        )
+
+        export_image_before_4_3 = ExportImage_Before_4_3.from_blender_image(image)
+        image_bytes, _specular_color_factor = export_image_before_4_3.encode(
+            mime_type, export_settings
+        )
+        return image_bytes, mime_type
+
+    from io_scene_gltf2.blender.exp.material.encode_image import ExportImage
+
+    export_image = ExportImage.from_blender_image(image)
     image_bytes, _specular_color_factor = export_image.encode(
         mime_type, export_settings
     )
@@ -72,15 +78,28 @@ def image_to_image_bytes(
 
 def init_extras_export() -> None:
     try:
-        # https://github.com/KhronosGroup/glTF-Blender-IO/blob/6f9d0d9fc1bb30e2b0bb019342ffe86bd67358fc/addons/io_scene_gltf2/blender/com/gltf2_blender_extras.py#L20-L21
-        gltf2_blender_extras = importlib.import_module(
-            "io_scene_gltf2.blender.com.gltf2_blender_extras"
-        )
-    except ModuleNotFoundError:
+        if bpy.app.version < (4, 5):
+            from io_scene_gltf2.blender.com.gltf2_blender_extras import BLACK_LIST
+        else:
+            from io_scene_gltf2.blender.com.extras import BLACK_LIST
+    except ImportError:
         return
     key = "vrm_addon_extension"
-    if key not in gltf2_blender_extras.BLACK_LIST:
-        gltf2_blender_extras.BLACK_LIST.append(key)
+    if key not in BLACK_LIST:
+        BLACK_LIST.append(key)
+
+
+def init_extras_import() -> None:
+    try:
+        if bpy.app.version < (4, 5):
+            from io_scene_gltf2.blender.com.gltf2_blender_extras import BLACK_LIST
+        else:
+            from io_scene_gltf2.blender.com.extras import BLACK_LIST
+    except ImportError:
+        return
+    key = "vrm_addon_extension"
+    if key not in BLACK_LIST:
+        BLACK_LIST.append(key)
 
 
 def create_export_settings() -> dict[str, object]:
@@ -144,12 +163,13 @@ def create_export_settings() -> dict[str, object]:
         return export_settings
 
     if bpy.app.version < (4, 3):
-        # https://github.com/KhronosGroup/glTF-Blender-IO/blob/b9bdc358ebf41e5f14be397d0d612cc8d645a09e/addons/io_scene_gltf2/__init__.py#L1270-L1271
-        gltf2_io_debug = importlib.import_module("io_scene_gltf2.io.com.gltf2_io_debug")
+        from io_scene_gltf2.io.com.gltf2_io_debug import Log as Log_Before_4_3
+
+        export_settings["log"] = Log_Before_4_3(loglevel)
     else:
-        # https://github.com/KhronosGroup/glTF-Blender-IO/blob/8630228d9db25a57f21de36329ed0e6d76094efa/addons/io_scene_gltf2/__init__.py#L1305
-        gltf2_io_debug = importlib.import_module("io_scene_gltf2.io.com.debug")
-    export_settings["log"] = gltf2_io_debug.Log(loglevel)
+        from io_scene_gltf2.io.com.debug import Log
+
+        export_settings["log"] = Log(loglevel)
 
     return export_settings
 
@@ -161,6 +181,7 @@ class ImportSceneGltfArguments:
     bone_heuristic: str
     guess_original_bind_pose: bool
     disable_bone_shape: bool
+    import_scene_as_collection: bool
 
 
 def import_scene_gltf(arguments: ImportSceneGltfArguments) -> set[str]:
@@ -172,12 +193,22 @@ def import_scene_gltf(arguments: ImportSceneGltfArguments) -> set[str]:
             guess_original_bind_pose=arguments.guess_original_bind_pose,
         )
 
+    if bpy.app.version < (4, 5):
+        return bpy.ops.import_scene.gltf(
+            filepath=arguments.filepath,
+            import_pack_images=arguments.import_pack_images,
+            bone_heuristic=arguments.bone_heuristic,
+            guess_original_bind_pose=arguments.guess_original_bind_pose,
+            disable_bone_shape=arguments.disable_bone_shape,
+        )
+
     return bpy.ops.import_scene.gltf(
         filepath=arguments.filepath,
         import_pack_images=arguments.import_pack_images,
         bone_heuristic=arguments.bone_heuristic,
         guess_original_bind_pose=arguments.guess_original_bind_pose,
         disable_bone_shape=arguments.disable_bone_shape,
+        import_scene_as_collection=arguments.import_scene_as_collection,
     )
 
 
@@ -195,6 +226,7 @@ class ExportSceneGltfArguments:
     export_armature_object_remove: bool
     export_rest_position_armature: bool
     export_all_influences: bool
+    export_vertex_color: str
     export_lights: bool
     export_try_sparse_sk: bool
     export_apply: bool
@@ -279,6 +311,7 @@ def __invoke_export_scene_gltf(arguments: ExportSceneGltfArguments) -> set[str]:
         export_animations=arguments.export_animations,
         export_armature_object_remove=arguments.export_armature_object_remove,
         export_rest_position_armature=arguments.export_rest_position_armature,
+        export_vertex_color=arguments.export_vertex_color,
         export_try_sparse_sk=arguments.export_try_sparse_sk,
         export_all_influences=arguments.export_all_influences,
         export_lights=arguments.export_lights,
@@ -287,13 +320,69 @@ def __invoke_export_scene_gltf(arguments: ExportSceneGltfArguments) -> set[str]:
 
 
 def export_scene_gltf(arguments: ExportSceneGltfArguments) -> set[str]:
+    last_exception: Optional[Exception] = None
     try:
         return __invoke_export_scene_gltf(arguments)
-    except RuntimeError:
-        if not arguments.export_animations:
-            raise
-        logger.exception("Failed to export VRM with animations")
-        # TODO: check traceback
+    except RuntimeError as exception:
+        last_exception = exception
 
-    arguments.export_animations = False
-    return __invoke_export_scene_gltf(arguments)
+    # export_armature_object_remove is unstable, and the conditions under which it
+    # fails are very complex, so I cannot fully grasp all of them.
+    # https://github.com/KhronosGroup/glTF-Blender-IO/issues/2436
+    # https://github.com/saturday06/VRM-Addon-for-Blender/issues/1033
+    if arguments.export_armature_object_remove:
+        arguments.export_armature_object_remove = False
+        logger.warning("retrying with `export_armature_object_remove = False`")
+        try:
+            return __invoke_export_scene_gltf(arguments)
+        except RuntimeError as exception:
+            last_exception = exception
+
+    # https://github.com/saturday06/VRM-Addon-for-Blender/commit/26f566d43b15c7a403c0f007b0290f9aef569114
+    if arguments.export_animations:
+        arguments.export_animations = False
+        logger.warning("retrying with `export_animations = False`")
+        try:
+            return __invoke_export_scene_gltf(arguments)
+        except RuntimeError as exception:
+            last_exception = exception
+
+    raise last_exception
+
+
+def gather_gltf2_io_material(
+    material: Material, export_settings: dict[str, object]
+) -> Optional[gltf2_io.Material]:
+    if bpy.app.version < (3, 2):
+        from io_scene_gltf2.blender.exp.gltf2_blender_gather_materials import (
+            gather_material as gather_material_before_3_2,
+        )
+
+        return gather_material_before_3_2(material, export_settings)
+
+    if bpy.app.version < (3, 6):
+        from io_scene_gltf2.blender.exp.gltf2_blender_gather_materials import (
+            gather_material as gather_material_before_3_6,
+        )
+
+        return gather_material_before_3_6(material, 0, export_settings)
+
+    if bpy.app.version < (4, 0):
+        from io_scene_gltf2.blender.exp.material.gltf2_blender_gather_materials import (
+            gather_material as gather_material_before_4_0,
+        )
+
+        return gather_material_before_4_0(material, 0, export_settings)
+
+    if bpy.app.version < (4, 3):
+        from io_scene_gltf2.blender.exp.material.gltf2_blender_gather_materials import (
+            gather_material as gather_material_before_4_3,
+        )
+
+        gltf2_io_material, _ = gather_material_before_4_3(material, export_settings)
+        return gltf2_io_material
+
+    from io_scene_gltf2.blender.exp.material.materials import gather_material
+
+    gltf2_io_material, _ = gather_material(material, export_settings)
+    return gltf2_io_material

@@ -31,6 +31,7 @@ from .property_group import StringPropertyGroup, property_group_enum
 from .spring_bone1.property_group import SpringBone1SpringBonePropertyGroup
 from .vrm0.property_group import Vrm0HumanoidPropertyGroup, Vrm0PropertyGroup
 from .vrm1.property_group import Vrm1HumanBonesPropertyGroup, Vrm1PropertyGroup
+from .bmesh_encoding.property_group import BmeshEncodingPropertyGroup
 
 if TYPE_CHECKING:
     from .property_group import CollectionPropertyProtocol
@@ -375,6 +376,10 @@ class VrmAddonArmatureExtensionPropertyGroup(PropertyGroup):
         type=NodeConstraint1NodeConstraintPropertyGroup
     )
 
+    bmesh_encoding: PointerProperty(  # type: ignore[valid-type]
+        type=BmeshEncodingPropertyGroup
+    )
+
     armature_data_name: StringProperty()  # type: ignore[valid-type]
 
     SPEC_VERSION_VRM0 = "0.0"
@@ -436,6 +441,7 @@ class VrmAddonArmatureExtensionPropertyGroup(PropertyGroup):
         node_constraint1: (  # type: ignore[no-redef]
             NodeConstraint1NodeConstraintPropertyGroup
         )
+        bmesh_encoding: BmeshEncodingPropertyGroup  # type: ignore[no-redef]
         armature_data_name: str  # type: ignore[no-redef]
         spec_version: str  # type: ignore[no-redef]
 
@@ -516,3 +522,11 @@ def get_object_extension(obj: Object) -> VrmAddonObjectExtensionPropertyGroup:
     if not isinstance(extension, VrmAddonObjectExtensionPropertyGroup):
         raise TypeError
     return extension
+
+
+def get_bmesh_encoding_extension(
+    armature: Armature,
+) -> BmeshEncodingPropertyGroup:
+    """Get BMesh encoding extension from armature."""
+    armature_ext = get_armature_extension(armature)
+    return armature_ext.bmesh_encoding

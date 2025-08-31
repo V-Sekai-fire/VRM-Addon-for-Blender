@@ -73,6 +73,8 @@ from .abstract_base_vrm_exporter import (
     assign_dict,
     force_apply_modifiers,
 )
+from ..editor.bmesh_encoding.encoding import BmeshEncoder
+import bmesh
 
 logger = get_logger(__name__)
 
@@ -83,16 +85,30 @@ class Vrm1Exporter(AbstractBaseVrmExporter):
         context: Context,
         export_objects: Sequence[Object],
         armature: Object,
-        *,
-        export_all_influences: bool,
-        export_lights: bool,
-        export_gltf_animations: bool,
+        export_preferences,
     ) -> None:
         super().__init__(context, export_objects, armature)
 
-        self.export_all_influences = export_all_influences
-        self.export_lights = export_lights
-        self.export_gltf_animations = export_gltf_animations
+        self.export_all_influences = (
+            export_preferences.enable_advanced_preferences
+            and export_preferences.export_all_influences
+        )
+        self.export_lights = (
+            export_preferences.enable_advanced_preferences
+            and export_preferences.export_lights
+        )
+        self.export_gltf_animations = (
+            export_preferences.enable_advanced_preferences
+            and export_preferences.export_gltf_animations
+        )
+        self.export_try_sparse_sk = (
+            export_preferences.enable_advanced_preferences
+            and export_preferences.export_try_sparse_sk
+        )
+        self.export_ext_bmesh_encoding = (
+            export_preferences.enable_advanced_preferences
+            and export_preferences.export_ext_bmesh_encoding
+        )
 
         self.extras_main_armature_key = (
             INTERNAL_NAME_PREFIX + self.export_id + "MainArmature"
@@ -104,6 +120,46 @@ class Vrm1Exporter(AbstractBaseVrmExporter):
         self.extras_material_name_key = (
             INTERNAL_NAME_PREFIX + self.export_id + "MaterialName"
         )
+        
+        # Storage for original mesh topology before triangulation
+        self.original_mesh_topology: dict[str, dict] = {}
+
+    def capture_original_mesh_topology(self) -> None:
+        """Capture original mesh topology before glTF triangulation occurs."""
+        if not self.export_ext_bmesh_encoding:
+            logger.info("EXT_bmesh_encoding export disabled, skipping topology capture")
+            return
+            
+        logger.info("Starting original mesh topology capture...")
+        bmesh_encoder = BmeshEncoder()
+        
+        for obj in self.export_objects:
+            if obj.type != "MESH":
+                logger.debug(f"Skipping non-mesh object '{obj.name}' (type: {obj.type})")
+                continue
+                
+            logger.info(f"Processing mesh object '{obj.name}' for topology capture...")
+            
+            try:
+                # Encode the original topology data using the native mesh approach
+                extension_data = bmesh_encoder.encode_object_native(obj)
+                if extension_data:
+                    # Store with both object name and mesh data name for lookup flexibility
+                    self.original_mesh_topology[obj.name] = extension_data
+                    if obj.data and obj.data.name != obj.name:
+                        self.original_mesh_topology[obj.data.name] = extension_data
+                        logger.info(f"Captured original topology for mesh '{obj.name}' (data: '{obj.data.name}')")
+                    else:
+                        logger.info(f"Captured original topology for mesh '{obj.name}'")
+                    
+                    # Log extension data structure
+                    logger.debug(f"Extension data keys for '{obj.name}': {list(extension_data.keys())}")
+                else:
+                    logger.warning(f"Failed to encode topology data for mesh '{obj.name}'")
+            except Exception as e:
+                logger.error(f"Error encoding topology for mesh '{obj.name}': {e}")
+        
+        logger.info(f"Topology capture complete. Stored data for {len(self.original_mesh_topology)} meshes: {list(self.original_mesh_topology.keys())}")
 
     @contextmanager
     def overwrite_object_visibility_and_selection(self) -> Iterator[None]:
@@ -2353,6 +2409,10 @@ class Vrm1Exporter(AbstractBaseVrmExporter):
             setup_humanoid_t_pose(self.context, self.armature),
             self.overwrite_object_visibility_and_selection(),
         ):
+            # Capture original mesh topology before backup objects are created
+            # This ensures topology is stored with original object names that will be used during lookup
+            self.capture_original_mesh_topology()
+            
             with (
                 self.disable_constraints(self.context),
                 self.hide_mtoon1_outline_geometry_nodes(self.context),
@@ -2362,6 +2422,7 @@ class Vrm1Exporter(AbstractBaseVrmExporter):
                 self.assign_export_custom_properties(armature_data),
                 tempfile.TemporaryDirectory() as temp_dir,
             ):
+                
                 force_apply_modifiers_to_objects(self.context, mesh_compat_object_names)
 
                 filepath = Path(temp_dir, "out.glb")
@@ -2385,6 +2446,7 @@ class Vrm1Exporter(AbstractBaseVrmExporter):
                         export_apply=False,
                         # Models may appear incorrectly in many viewers
                         export_all_influences=self.export_all_influences,
+                        export_vertex_color="MATERIAL",
                         # TODO: Expose UI Option, Unity allows light export
                         export_lights=self.export_lights,
                         # UniVRM 0.115.0 doesn't support `export_try_sparse_sk`
@@ -2702,6 +2764,12 @@ class Vrm1Exporter(AbstractBaseVrmExporter):
             self.context, json_dict, material_name_to_index_dict
         )
 
+        # Add EXT_bmesh_encoding support for VRM 1.0
+        if self.export_ext_bmesh_encoding:
+            self.add_ext_bmesh_encoding_to_meshes(
+                json_dict, buffer0, object_name_to_index_dict
+            )
+
         extensions_used = json_dict.get("extensionsUsed")
         if not isinstance(extensions_used, list):
             extensions_used = []
@@ -2830,6 +2898,161 @@ class Vrm1Exporter(AbstractBaseVrmExporter):
                 json_dict.pop(key, None)
 
         return pack_glb(json_dict, buffer0)
+
+    def add_ext_bmesh_encoding_to_meshes(
+        self,
+        json_dict: dict[str, Json],
+        buffer0: bytearray,
+        object_name_to_index_dict: Mapping[str, int],
+    ) -> None:
+        """Add EXT_bmesh_encoding extension data to meshes for VRM 1.0."""
+        logger.info("Starting EXT_bmesh_encoding addition to meshes...")
+        
+        try:
+            mesh_dicts = json_dict.get("meshes")
+            if not isinstance(mesh_dicts, list):
+                logger.error("No meshes array found in glTF JSON")
+                return
+
+            logger.info(f"Found {len(mesh_dicts)} meshes in glTF JSON")
+            for i, mesh_dict in enumerate(mesh_dicts):
+                if isinstance(mesh_dict, dict):
+                    mesh_name = mesh_dict.get("name", f"unnamed_mesh_{i}")
+                    logger.debug(f"Mesh {i}: '{mesh_name}'")
+
+            extensions_used = json_dict.get("extensionsUsed")
+            if not isinstance(extensions_used, list):
+                extensions_used = []
+                json_dict["extensionsUsed"] = extensions_used
+
+            logger.info(f"Current extensions used: {extensions_used}")
+
+            bmesh_encoder = BmeshEncoder()
+            successful_additions = 0
+
+            logger.info(f"Processing {len(object_name_to_index_dict)} objects from name-to-index mapping...")
+            logger.debug(f"Object name to index mapping: {dict(object_name_to_index_dict)}")
+            logger.info(f"Available stored topology keys: {list(self.original_mesh_topology.keys())}")
+
+            # Process each mesh object that has stored original topology
+            for object_name, node_index in object_name_to_index_dict.items():
+                logger.info(f"Processing object '{object_name}' at node index {node_index}...")
+                
+                obj = self.context.blend_data.objects.get(object_name)
+                if not obj:
+                    logger.warning(f"Object '{object_name}' not found in blend data")
+                    continue
+                    
+                if obj.type != "MESH":
+                    logger.debug(f"Skipping non-mesh object '{object_name}' (type: {obj.type})")
+                    continue
+
+                logger.info(f"Found mesh object '{object_name}' with data name '{obj.data.name if obj.data else 'NO_DATA'}'")
+
+                # Try multiple lookup strategies for stored topology
+                raw_extension_data = None
+                lookup_keys = [object_name]
+                if obj.data and obj.data.name != object_name:
+                    lookup_keys.append(obj.data.name)
+                
+                for lookup_key in lookup_keys:
+                    raw_extension_data = self.original_mesh_topology.get(lookup_key)
+                    if raw_extension_data:
+                        logger.info(f"Found stored topology data for '{object_name}' using lookup key '{lookup_key}'")
+                        break
+                
+                if not raw_extension_data:
+                    logger.warning(f"No original topology stored for mesh '{object_name}' (tried keys: {lookup_keys}), skipping EXT_bmesh_encoding")
+                    continue
+
+                logger.debug(f"Raw extension data keys for '{object_name}': {list(raw_extension_data.keys())}")
+
+                # Create buffer views and get final extension data
+                logger.info(f"Creating buffer views for '{object_name}'...")
+                extension_data = bmesh_encoder.create_buffer_views(json_dict, buffer0, raw_extension_data)
+                
+                if not extension_data:
+                    logger.error(f"Failed to create buffer views for '{object_name}'")
+                    continue
+
+                logger.info(f"Created extension data for '{object_name}' with keys: {list(extension_data.keys())}")
+
+                # Find the corresponding mesh in the glTF data - try multiple strategies
+                mesh_dict = None
+                mesh_name = obj.data.name if obj.data else obj.name
+                
+                # Strategy 1: Look for mesh by data name
+                mesh_dict = next(
+                    (mesh for mesh in mesh_dicts if mesh.get("name") == mesh_name),
+                    None,
+                )
+                
+                if not mesh_dict:
+                    # Strategy 2: Look for mesh by object name
+                    mesh_dict = next(
+                        (mesh for mesh in mesh_dicts if mesh.get("name") == object_name),
+                        None,
+                    )
+                
+                if not mesh_dict:
+                    # Strategy 3: Find mesh by node index matching
+                    from_node_index = None
+                    node_dicts = json_dict.get("nodes", [])
+                    if 0 <= node_index < len(node_dicts):
+                        node_dict = node_dicts[node_index]
+                        if isinstance(node_dict, dict):
+                            from_node_index = node_dict.get("mesh")
+                    
+                    if isinstance(from_node_index, int) and 0 <= from_node_index < len(mesh_dicts):
+                        mesh_dict = mesh_dicts[from_node_index]
+                        logger.info(f"Found mesh for '{object_name}' via node index {node_index} -> mesh index {from_node_index}")
+                
+                if not mesh_dict:
+                    logger.error(f"Could not find corresponding mesh in glTF data for object '{object_name}' (looked for mesh names: {mesh_name}, {object_name})")
+                    continue
+
+                actual_mesh_name = mesh_dict.get("name", "unnamed")
+                logger.info(f"Found target mesh '{actual_mesh_name}' for object '{object_name}'")
+
+                if "primitives" not in mesh_dict:
+                    logger.warning(f"Mesh '{actual_mesh_name}' has no primitives array")
+                    continue
+
+                primitives = mesh_dict["primitives"]
+                if not isinstance(primitives, list) or not primitives:
+                    logger.warning(f"Mesh '{actual_mesh_name}' has empty or invalid primitives array")
+                    continue
+
+                logger.info(f"Mesh '{actual_mesh_name}' has {len(primitives)} primitives")
+
+                # Add extension to first primitive
+                primitive = primitives[0]
+                if not isinstance(primitive, dict):
+                    logger.error(f"First primitive of mesh '{actual_mesh_name}' is not a dictionary")
+                    continue
+
+                if "extensions" not in primitive:
+                    primitive["extensions"] = {}
+                    logger.debug(f"Created extensions object for primitive in mesh '{actual_mesh_name}'")
+
+                primitive["extensions"]["EXT_bmesh_encoding"] = extension_data
+                logger.info(f"Successfully added EXT_bmesh_encoding to primitive in mesh '{actual_mesh_name}'")
+
+                # Add to extensions used
+                if "EXT_bmesh_encoding" not in extensions_used:
+                    extensions_used.append("EXT_bmesh_encoding")
+                    logger.info("Added EXT_bmesh_encoding to extensionsUsed array")
+
+                successful_additions += 1
+                logger.info(f"Successfully added EXT_bmesh_encoding to mesh '{actual_mesh_name}' for object '{object_name}'")
+
+            logger.info(f"EXT_bmesh_encoding addition complete. Successfully added to {successful_additions} meshes.")
+            logger.info(f"Final extensionsUsed array: {extensions_used}")
+
+        except Exception as e:
+            logger.error(f"Failed to add EXT_bmesh_encoding to VRM 1.0 meshes: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
 
 
 def find_node_world_matrix(

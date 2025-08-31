@@ -93,6 +93,11 @@ class EXPORT_SCENE_OT_vrm(Operator, ExportHelper):
         name="Enable Advanced Options",
         update=export_vrm_update_addon_preferences,
     )
+    export_ext_bmesh_encoding: BoolProperty(  # type: ignore[valid-type]
+        name="Export EXT_bmesh_encoding",
+        description="Enable BMesh topology preservation using EXT_bmesh_encoding extension",
+        update=export_vrm_update_addon_preferences,
+    )
     export_all_influences: BoolProperty(  # type: ignore[valid-type]
         name="Export All Bone Influences",
         description="Don't limit to 4, most viewers truncate to 4, "
@@ -107,6 +112,11 @@ class EXPORT_SCENE_OT_vrm(Operator, ExportHelper):
     )
     export_gltf_animations: BoolProperty(  # type: ignore[valid-type]
         name="Export glTF Animations",
+    )
+    export_try_sparse_sk: BoolProperty(  # type: ignore[valid-type]
+        name="Export Sparse Shape Keys",
+        description="Try to use sparse accessor for shape keys",
+        update=export_vrm_update_addon_preferences,
     )
 
     errors: CollectionProperty(  # type: ignore[valid-type]
@@ -132,6 +142,7 @@ class EXPORT_SCENE_OT_vrm(Operator, ExportHelper):
             self,
             context,
             armature_object_name=self.armature_object_name,
+            export_ext_bmesh_encoding=self.export_ext_bmesh_encoding,
         )
 
     def invoke(self, context: Context, event: Event) -> set[str]:
@@ -235,9 +246,11 @@ class EXPORT_SCENE_OT_vrm(Operator, ExportHelper):
         export_invisibles: bool  # type: ignore[no-redef]
         export_only_selections: bool  # type: ignore[no-redef]
         enable_advanced_preferences: bool  # type: ignore[no-redef]
+        export_ext_bmesh_encoding: bool  # type: ignore[no-redef]
         export_all_influences: bool  # type: ignore[no-redef]
         export_lights: bool  # type: ignore[no-redef]
         export_gltf_animations: bool  # type: ignore[no-redef]
+        export_try_sparse_sk: bool  # type: ignore[no-redef]
         errors: CollectionPropertyProtocol[  # type: ignore[no-redef]
             VrmValidationError
         ]
@@ -251,6 +264,7 @@ def export_vrm(
     context: Context,
     *,
     armature_object_name: str,
+    export_ext_bmesh_encoding: bool = False,
 ) -> set[str]:
     if ops.vrm.model_validate(
         "INVOKE_DEFAULT",
@@ -311,15 +325,14 @@ def export_vrm(
                 context,
                 export_objects,
                 armature_object,
-                export_all_influences=export_all_influences,
-                export_lights=export_lights,
-                export_gltf_animations=export_gltf_animations,
+                export_preferences,
             )
         else:
             vrm_exporter = Vrm0Exporter(
                 context,
                 export_objects,
                 armature_object,
+                export_ext_bmesh_encoding=export_ext_bmesh_encoding,
             )
 
         vrm_bytes = vrm_exporter.export_vrm()

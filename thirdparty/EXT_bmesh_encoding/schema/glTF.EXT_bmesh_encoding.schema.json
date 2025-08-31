@@ -1,0 +1,147 @@
+{
+    "$schema": "http://json-schema.org/draft-04/schema",
+    "title": "EXT_bmesh_encoding glTF extension",
+    "type": "object",
+    "description": "glTF extension for BMesh encoding with buffer-based storage for optimal performance",
+    "allOf": [
+        {
+            "$ref": "glTFProperty.schema.json"
+        }
+    ],
+    "properties": {
+        "vertices": {
+            "type": "object",
+            "description": "Buffer-based vertex data",
+            "properties": {
+                "count": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Number of vertices"
+                },
+                "positions": {
+                    "allOf": [{"$ref": "glTFid.schema.json"}],
+                    "description": "Buffer view containing vertex positions (Vec3<f32>)"
+                },
+                "edges": {
+                    "allOf": [{"$ref": "glTFid.schema.json"}],
+                    "description": "Buffer view containing vertex-edge adjacency data"
+                },
+                "attributes": {
+                    "type": "object",
+                    "description": "Buffer views for vertex attributes",
+                    "patternProperties": {
+                        "^(POSITION|NORMAL|TANGENT|COLOR_[0-9]+|TEXCOORD_[0-9]+|JOINTS_[0-9]+|WEIGHTS_[0-9]+|_[A-Z_][A-Z0-9_]*)$": {
+                            "allOf": [{"$ref": "glTFid.schema.json"}]
+                        }
+                    },
+                    "additionalProperties": false,
+                    "description": "Standard glTF vertex attributes plus optional EXT_bmesh_encoding specific custom attributes"
+                }
+            },
+            "required": ["count", "positions"]
+        },
+        "edges": {
+            "type": "object",
+            "description": "Buffer-based edge data",
+            "properties": {
+                "count": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Number of edges"
+                },
+                "vertices": {
+                    "allOf": [{"$ref": "glTFid.schema.json"}],
+                    "description": "Buffer view containing edge vertex pairs (2×u32 per edge)"
+                },
+                "faces": {
+                    "allOf": [{"$ref": "glTFid.schema.json"}],
+                    "description": "Buffer view containing edge-face adjacency data"
+                },
+                "manifold": {
+                    "allOf": [{"$ref": "glTFid.schema.json"}],
+                    "description": "Buffer view containing manifold flags (u8 per edge: 0=non-manifold, 1=manifold, 255=unknown)"
+                },
+                "attributes": {
+                    "type": "object",
+                    "description": "Buffer views for edge attributes",
+                    "patternProperties": {
+                        "^_[A-Z_][A-Z0-9_]*$": {
+                            "allOf": [{"$ref": "glTFid.schema.json"}]
+                        }
+                    }
+                }
+            },
+            "required": ["count", "vertices"]
+        },
+        "loops": {
+            "type": "object",
+            "description": "Buffer-based loop data",
+            "properties": {
+                "count": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Number of loops"
+                },
+                "topology": {
+                    "allOf": [{"$ref": "glTFid.schema.json"}],
+                    "description": "Buffer view containing loop topology (vertex, edge, face, next, prev, radial_next, radial_prev as 7×u32 per loop)"
+                },
+                "attributes": {
+                    "type": "object",
+                    "description": "Buffer views for loop attributes (follows glTF 2.0 attribute naming)",
+                    "patternProperties": {
+                        "^(TEXCOORD_[0-9]+|COLOR_[0-9]+|_[A-Z_][A-Z0-9_]*)$": {
+                            "allOf": [{"$ref": "glTFid.schema.json"}]
+                        }
+                    }
+                }
+            },
+            "required": ["count", "topology"]
+        },
+        "faces": {
+            "type": "object",
+            "description": "Buffer-based face data",
+            "properties": {
+                "count": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Number of faces"
+                },
+                "vertices": {
+                    "allOf": [{"$ref": "glTFid.schema.json"}],
+                    "description": "Buffer view containing face vertex lists (variable length, u32 indices)"
+                },
+                "edges": {
+                    "allOf": [{"$ref": "glTFid.schema.json"}],
+                    "description": "Buffer view containing face edge lists (variable length, u32 indices)"
+                },
+                "loops": {
+                    "allOf": [{"$ref": "glTFid.schema.json"}],
+                    "description": "Buffer view containing face loop lists (variable length, u32 indices)"
+                },
+                "normals": {
+                    "allOf": [{"$ref": "glTFid.schema.json"}],
+                    "description": "Buffer view containing face normals (Vec3<f32> per face)"
+                },
+                "offsets": {
+                    "allOf": [{"$ref": "glTFid.schema.json"}],
+                    "description": "Buffer view containing face data offsets for variable-length arrays (u32 per face + 1)"
+                },
+                "attributes": {
+                    "type": "object",
+                    "description": "Buffer views for face attributes",
+                    "patternProperties": {
+                        "^_[A-Z_][A-Z0-9_]*$": {
+                            "allOf": [{"$ref": "glTFid.schema.json"}]
+                        }
+                    }
+                }
+            },
+            "required": ["count", "vertices", "offsets"]
+        },
+        "extensions": {},
+        "extras": {}
+    },
+    "additionalProperties": false,
+    "required": ["vertices", "edges", "loops", "faces"]
+}

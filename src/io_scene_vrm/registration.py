@@ -62,6 +62,7 @@ from .editor.vrm1 import ops as vrm1_ops
 from .editor.vrm1 import panel as vrm1_panel
 from .editor.vrm1 import property_group as vrm1_property_group
 from .editor.vrm1 import ui_list as vrm1_ui_list
+from .editor.bmesh_encoding import property_group as bmesh_encoding_property_group
 from .exporter import export_scene
 from .external import io_scene_gltf2_support
 from .importer import file_handler, import_scene
@@ -179,6 +180,11 @@ classes: list[
     vrm1_property_group.Vrm1ExpressionsPropertyGroup,
     vrm1_property_group.Vrm1MetaPropertyGroup,
     vrm1_property_group.Vrm1PropertyGroup,
+    bmesh_encoding_property_group.BmeshEncodingVertexPropertyGroup,
+    bmesh_encoding_property_group.BmeshEncodingEdgePropertyGroup,
+    bmesh_encoding_property_group.BmeshEncodingLoopPropertyGroup,
+    bmesh_encoding_property_group.BmeshEncodingFacePropertyGroup,
+    bmesh_encoding_property_group.BmeshEncodingPropertyGroup,
     node_constraint1_property_group.NodeConstraint1NodeConstraintPropertyGroup,
     spring_bone1_property_group.SpringBone1ExtendedColliderShapeSpherePropertyGroup,
     spring_bone1_property_group.SpringBone1ExtendedColliderShapeCapsulePropertyGroup,
