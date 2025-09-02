@@ -146,7 +146,10 @@ class AbstractBaseVrmImporter(ABC):
                 self.setup_object_selection_and_activation()
                 progress.update(0.98)
         finally:
-            glTF2ImportUserExtension.clear_current_import_id()
+            Gltf2AddonImporterUserExtension.clear_current_import_id()
+            # Clear preprocessor data after import completion
+            from ..editor.bmesh_encoding.preprocessor import BmeshEncodingPreprocessor
+            BmeshEncodingPreprocessor.clear_extracted_data()
 
     @property
     def armature_data(self) -> Armature:
@@ -539,6 +542,10 @@ class AbstractBaseVrmImporter(ABC):
 
     def import_gltf2_with_indices(self) -> None:
         json_dict, buffer0_bytes = parse_glb(self.parse_result.filepath.read_bytes())
+        
+        # Preprocess glTF JSON to extract BMesh encoding data and prevent import errors
+        from ..editor.bmesh_encoding.preprocessor import BmeshEncodingPreprocessor
+        json_dict = BmeshEncodingPreprocessor.preprocess_gltf_json(json_dict)
 
         for key in ["nodes", "materials", "meshes"]:
             if key not in json_dict or not isinstance(json_dict[key], list):
@@ -962,6 +969,10 @@ class AbstractBaseVrmImporter(ABC):
         else:
             bone_heuristic = "BLENDER"
         full_vrm_import_success = False
+        # Initialize import protection before glTF import
+        from ..external.io_scene_gltf2_support import init_extras_import
+        init_extras_import()
+        
         with tempfile.TemporaryDirectory() as temp_dir:
             indexed_vrm_filepath = Path(temp_dir, "indexed.vrm")
             indexed_vrm_filepath.write_bytes(pack_glb(json_dict, buffer0_bytes))

@@ -105,6 +105,8 @@ class ExportPreferencesProtocol(Protocol):
     export_invisibles: bool
     export_only_selections: bool
     enable_advanced_preferences: bool
+    export_ext_bmesh_encoding: bool
+    export_try_sparse_sk: bool
     export_all_influences: bool
     export_lights: bool
     export_gltf_animations: bool
@@ -118,6 +120,8 @@ def copy_export_preferences(
         destination.export_invisibles,
         destination.export_only_selections,
         destination.enable_advanced_preferences,
+        destination.export_ext_bmesh_encoding,
+        destination.export_try_sparse_sk,
         destination.export_all_influences,
         destination.export_lights,
         destination.export_gltf_animations,
@@ -126,6 +130,8 @@ def copy_export_preferences(
         source.export_invisibles,
         source.export_only_selections,
         source.enable_advanced_preferences,
+        source.export_ext_bmesh_encoding,
+        source.export_try_sparse_sk,
         source.export_all_influences,
         source.export_lights,
         source.export_gltf_animations,
@@ -134,17 +140,22 @@ def copy_export_preferences(
 
 
 def draw_advanced_options_description(
-    preferences: Union[AddonPreferences, Operator],
+    preferences: ExportPreferencesProtocol,
     property_name: str,
     layout: UILayout,
     description: str,
 ) -> None:
-    column = layout.box().column(align=True)
-    column.prop(preferences, property_name)
-    description_column = column.box().column(align=True)
-    for i, line in enumerate(description.splitlines()):
-        icon = "ERROR" if i == 0 else "NONE"
-        description_column.label(text=line, translate=False, icon=icon)
+    """Draw an advanced option with its description."""
+    row = layout.row()
+    row.prop(preferences, property_name)
+
+    # Add description as help text
+    if description:
+        box = layout.box()
+        lines = description.split('\n')
+        for line in lines:
+            if line.strip():
+                box.label(text=line.strip())
 
 
 def draw_export_preferences_layout(
@@ -163,10 +174,24 @@ def draw_export_preferences_layout(
         return
 
     layout.prop(preferences, "enable_advanced_preferences")
+
     if not preferences.enable_advanced_preferences:
         return
 
     advanced_options_column = layout.box().column()
+
+    # EXT_bmesh_encoding extension
+    draw_advanced_options_description(
+        preferences,
+        "export_ext_bmesh_encoding",
+        advanced_options_column,
+        pgettext(
+            "Preserves complete BMesh topology\n"
+            + "(vertices, edges, loops, faces) using\n"
+            + "EXT_bmesh_encoding extension.\n"
+            + "Provides graceful fallback to standard glTF."
+        ),
+    )
 
     # UniVRM 0.115.0 doesn't support `export_try_sparse_sk`
     # https://github.com/saturday06/VRM-Addon-for-Blender/issues/381#issuecomment-1838365762
@@ -286,6 +311,16 @@ class VrmAddonPreferences(AddonPreferences):
     enable_advanced_preferences: BoolProperty(  # type: ignore[valid-type]
         name="Enable Advanced Options",
     )
+    export_ext_bmesh_encoding: BoolProperty(  # type: ignore[valid-type]
+        name="Export EXT_bmesh_encoding",
+        description="Enable BMesh topology preservation using EXT_bmesh_encoding extension",
+        default=False,
+    )
+    export_try_sparse_sk: BoolProperty(  # type: ignore[valid-type]
+        name="Export Sparse Shape Keys",
+        description="Reduces file size but may not be readable by older apps",
+        default=False,
+    )
     export_all_influences: BoolProperty(  # type: ignore[valid-type]
         name="Export All Bone Influences",
     )
@@ -339,6 +374,8 @@ class VrmAddonPreferences(AddonPreferences):
         export_invisibles: bool  # type: ignore[no-redef]
         export_only_selections: bool  # type: ignore[no-redef]
         enable_advanced_preferences: bool  # type: ignore[no-redef]
+        export_ext_bmesh_encoding: bool  # type: ignore[no-redef]
+        export_try_sparse_sk: bool  # type: ignore[no-redef]
         export_all_influences: bool  # type: ignore[no-redef]
         export_lights: bool  # type: ignore[no-redef]
         export_gltf_animations: bool  # type: ignore[no-redef]

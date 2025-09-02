@@ -16,6 +16,9 @@ from .extension import (
     get_armature_extension,
 )
 from .mtoon1 import migration as mtoon1_migration
+from .mtoon1 import ops as mtoon1_ops
+from .property_group import BonePropertyGroup
+from .bmesh_encoding import migration as bmesh_encoding_migration
 from .spring_bone1 import migration as spring_bone1_migration
 from .vrm0 import migration as vrm0_migration
 from .vrm1 import migration as vrm1_migration
@@ -84,6 +87,7 @@ def migrate(context: Optional[Context], armature_object_name: str) -> bool:
     vrm0_migration.migrate(context, ext.vrm0, armature)
     vrm1_migration.migrate(context, ext.vrm1, armature)
     spring_bone1_migration.migrate(context, armature)
+    bmesh_encoding_migration.migrate(context, armature)
 
     updated_addon_version = get_addon_version()
     logger.info(

@@ -33,6 +33,7 @@ from ..editor.extension import (
     get_material_extension,
     get_object_extension,
 )
+from ..editor.bmesh_encoding.decoding import BmeshDecoder
 from ..editor.make_armature import (
     connect_parent_tail_and_child_head_if_very_close_position,
 )
@@ -427,6 +428,58 @@ class Vrm1Importer(AbstractBaseVrmImporter):
                 self.make_mtoon1_material(index, material_dict)
             progress.update(float(index) / len(material_dicts))
         progress.update(1)
+
+    def load_ext_bmesh_encoding(self) -> None:
+        """Process meshes with EXT_bmesh_encoding extension data."""
+        meshes_dict = self.parse_result.json_dict.get("meshes")
+        if not isinstance(meshes_dict, list):
+            return
+
+        decoder = BmeshDecoder()
+        
+        for mesh_index, mesh_dict in enumerate(meshes_dict):
+            if not isinstance(mesh_dict, dict):
+                continue
+                
+            primitives = mesh_dict.get("primitives")
+            if not isinstance(primitives, list):
+                continue
+                
+            for primitive_index, primitive_dict in enumerate(primitives):
+                if not isinstance(primitive_dict, dict):
+                    continue
+                    
+                # Check if this primitive has EXT_bmesh_encoding
+                if not decoder.detect_extension_in_primitive(primitive_dict):
+                    continue
+                    
+                logger.info(f"Processing EXT_bmesh_encoding for mesh {mesh_index}, primitive {primitive_index}")
+                
+                # Extract extension data
+                extension_data = decoder.extract_extension_data(primitive_dict)
+                if not extension_data:
+                    continue
+                    
+                # Find the corresponding Blender mesh object
+                mesh_obj = self.meshes.get(mesh_index)
+                if not mesh_obj or not mesh_obj.data:
+                    logger.warning(f"Could not find mesh object for mesh {mesh_index}")
+                    continue
+                    
+                # Decode BMesh topology - pass parse_result for buffer access
+                reconstructed_bmesh = decoder.decode_gltf_extension_to_bmesh(extension_data, self.parse_result)
+                if not reconstructed_bmesh:
+                    logger.warning(f"Failed to decode EXT_bmesh_encoding for mesh {mesh_index}")
+                    continue
+                    
+                # Apply BMesh topology to Blender mesh
+                if decoder.apply_bmesh_to_blender_mesh(reconstructed_bmesh, mesh_obj.data):
+                    logger.info(f"Successfully applied EXT_bmesh_encoding topology to mesh {mesh_index}")
+                else:
+                    logger.warning(f"Failed to apply BMesh topology to mesh {mesh_index}")
+                    
+                # Clean up BMesh
+                reconstructed_bmesh.free()
 
     def find_vrm1_bone_node_indices(self) -> list[int]:
         result: list[int] = []
@@ -937,6 +990,9 @@ class Vrm1Importer(AbstractBaseVrmImporter):
             self.load_spring_bone1(
                 addon_extension.spring_bone1, extensions_dict.get("VRMC_springBone")
             )
+
+        # Process EXT_bmesh_encoding mesh topology data
+        self.load_ext_bmesh_encoding()
 
         self.load_node_constraint1()
         migration.migrate(self.context, armature.name)

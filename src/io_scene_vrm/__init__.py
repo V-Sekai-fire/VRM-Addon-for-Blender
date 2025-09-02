@@ -24,6 +24,24 @@ bl_info = {
     "category": "Import-Export",
 }
 
+MINIMUM_UNSUPPORTED_BLENDER_MAJOR_MINOR_VERSION = (4, 6)
+
+
+def cleanse_modules() -> None:
+    """Search for your plugin modules in blender python sys.modules and remove them.
+
+    To support reload properly, try to access a package var, if it's there,
+    reload everything
+    """
+    import sys
+
+    all_modules = sys.modules
+    all_modules = dict(sorted(all_modules.items(), key=lambda x: x[0]))  # sort them
+
+    for k in all_modules:
+        if k == __name__ or k.startswith(__name__ + "."):
+            del sys.modules[k]
+
 
 def register() -> None:
     registration.register()
