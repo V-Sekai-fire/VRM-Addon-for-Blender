@@ -7,7 +7,7 @@
 
 ## Status
 
-Active Development
+Superceded by https://github.com/fire/bmesh-encoding/tree/main/EXT_bmesh_encoding
 
 ## Dependencies
 
