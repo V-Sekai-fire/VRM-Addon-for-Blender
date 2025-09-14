@@ -57,6 +57,7 @@ from ..editor.vrm1.property_group import (
     Vrm1MetaPropertyGroup,
 )
 from .abstract_base_vrm_importer import AbstractBaseVrmImporter
+from .ext_mesh_bmesh_importer import ExtMeshBmeshImporter
 
 logger = get_logger(__name__)
 
@@ -937,6 +938,9 @@ class Vrm1Importer(AbstractBaseVrmImporter):
             self.load_spring_bone1(
                 addon_extension.spring_bone1, extensions_dict.get("VRMC_springBone")
             )
+
+        # Process EXT_mesh_bmesh extensions
+        self.load_ext_mesh_bmesh()
 
         self.load_node_constraint1()
         migration.migrate(self.context, armature.name)
@@ -1873,3 +1877,48 @@ class Vrm1Importer(AbstractBaseVrmImporter):
                 elif isinstance(source, PoseBone):
                     constraint.target = armature
                     constraint.subtarget = source.name
+
+    def load_ext_mesh_bmesh(self) -> None:
+        """Load EXT_mesh_bmesh extensions from primitives."""
+        if not hasattr(self, 'parse_result') or not self.parse_result:
+            return
+
+        gltf_data = self.parse_result.json_dict
+        buffers = self.parse_result.buffers
+
+        # Initialize EXT_mesh_bmesh importer
+        bmesh_importer = ExtMeshBmeshImporter(gltf_data, buffers)
+
+        # Process meshes and primitives
+        meshes = gltf_data.get("meshes", [])
+        for mesh_index, mesh_dict in enumerate(meshes):
+            if not isinstance(mesh_dict, dict):
+                continue
+
+            mesh_name = mesh_dict.get("name", f"Mesh_{mesh_index}")
+            primitives = mesh_dict.get("primitives", [])
+
+            for primitive_index, primitive in enumerate(primitives):
+                if not isinstance(primitive, dict):
+                    continue
+
+                # Check if primitive has EXT_mesh_bmesh extension
+                if bmesh_importer.is_supported(primitive):
+                    primitive_name = f"{mesh_name}_primitive_{primitive_index}"
+
+                    # Import with EXT_mesh_bmesh
+                    mesh = bmesh_importer.import_primitive(primitive, primitive_name)
+
+                    if mesh:
+                        # Create object for the mesh
+                        obj = self.context.blend_data.objects.new(primitive_name, mesh)
+                        self.context.scene.collection.objects.link(obj)
+
+                        # Store the imported object
+                        if not hasattr(self, 'imported_mesh_objects'):
+                            self.imported_mesh_objects = []
+                        self.imported_mesh_objects.append(obj)
+
+                        logger.info(f"Imported EXT_mesh_bmesh primitive: {primitive_name}")
+                    else:
+                        logger.warning(f"Failed to import EXT_mesh_bmesh primitive: {primitive_name}")

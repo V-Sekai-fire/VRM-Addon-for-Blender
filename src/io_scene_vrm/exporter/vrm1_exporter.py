@@ -79,6 +79,7 @@ from .abstract_base_vrm_exporter import (
     assign_dict,
     force_apply_modifiers,
 )
+from .ext_mesh_bmesh_exporter import ExtMeshBmeshExporter
 
 logger = get_logger(__name__)
 
@@ -3094,7 +3095,44 @@ class Vrm1Exporter(AbstractBaseVrmExporter):
             if not json_dict.get(key):
                 json_dict.pop(key, None)
 
+        # Process EXT_mesh_bmesh export
+        self.export_ext_mesh_bmesh(json_dict, buffer0)
+
         return pack_glb(json_dict, buffer0)
+
+    def export_ext_mesh_bmesh(self, json_dict: dict[str, Json], buffer0: bytearray) -> None:
+        """Export EXT_mesh_bmesh extensions for meshes with complex topology."""
+        # Initialize EXT_mesh_bmesh exporter
+        bmesh_exporter = ExtMeshBmeshExporter()
+
+        # Process meshes and primitives
+        mesh_dicts = json_dict.get("meshes", [])
+        for mesh_index, mesh_dict in enumerate(mesh_dicts):
+            if not isinstance(mesh_dict, dict):
+                continue
+
+            mesh_name = mesh_dict.get("name", f"Mesh_{mesh_index}")
+            primitives = mesh_dict.get("primitives", [])
+
+            for primitive_index, primitive in enumerate(primitives):
+                if not isinstance(primitive, dict):
+                    continue
+
+                # Check if primitive should use EXT_mesh_bmesh
+                if bmesh_exporter.should_export_bmesh(primitive, mesh_name):
+                    primitive_name = f"{mesh_name}_primitive_{primitive_index}"
+
+                    # Export with EXT_mesh_bmesh
+                    bmesh_exporter.export_primitive(primitive, primitive_name, json_dict, buffer0)
+
+                    logger.info(f"Exported EXT_mesh_bmesh primitive: {primitive_name}")
+
+        # Add EXT_mesh_bmesh to extensionsUsed if any primitives were exported
+        if bmesh_exporter.has_exported_primitives:
+            extensions_used = json_dict.get("extensionsUsed", [])
+            if "EXT_mesh_bmesh" not in extensions_used:
+                extensions_used.append("EXT_mesh_bmesh")
+                json_dict["extensionsUsed"] = extensions_used
 
 
 def find_node_world_matrix(
