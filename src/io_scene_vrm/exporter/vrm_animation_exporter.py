@@ -1,20 +1,11 @@
 # SPDX-License-Identifier: MIT OR GPL-3.0-or-later
 import itertools
 import struct
-from collections.abc import Sequence
 from os import environ
 from pathlib import Path
 from typing import Optional
 
-import bpy
-from bpy.types import (
-    Action,
-    Armature,
-    Context,
-    FCurve,
-    Object,
-    PoseBone,
-)
+from bpy.types import Armature, Context, Object, PoseBone
 from mathutils import Euler, Matrix, Quaternion, Vector
 
 from ..common import version
@@ -168,9 +159,9 @@ def export_vrm_animation(context: Context, armature: Object) -> bytes:
             )
 
         base_quaternion: Optional[Quaternion] = None
-        if bone_parent := bone.parent:
+        if bone.parent:
             base_quaternion = (
-                bone_parent.matrix.inverted_safe() @ bone.matrix
+                bone.parent.matrix.inverted_safe() @ bone.matrix
             ).to_quaternion()
         else:
             base_quaternion = bone.matrix.to_quaternion()
@@ -360,7 +351,7 @@ def create_look_at_animation(
 
     look_at_translation_offsets: list[Vector] = []
     data_path = look_at_target_object.path_from_id("location")
-    for fcurve in get_action_fcurves(action):
+    for fcurve in action.fcurves:
         if fcurve.mute:
             continue
         if not fcurve.is_valid:
@@ -377,20 +368,20 @@ def create_look_at_animation(
                 look_at_translation_offsets.append(translation_offset)
             translation_offset[fcurve.array_index] = value
 
-    parent = look_at_target_object.parent
-    parent_world_matrix = parent.matrix_world if parent else Matrix()
-
+    look_at_default_node_translation, look_at_rotation, look_at_scale = (
+        look_at_target_object.matrix_world.decompose()
+    )
+    look_at_rotation_and_scale_matrix = (
+        look_at_rotation.to_matrix().to_4x4() @ Matrix.Diagonal(look_at_scale).to_4x4()
+    )
     look_at_translations = [
-        parent_world_matrix @ look_at_translation_offset
+        look_at_translation_offset @ look_at_rotation_and_scale_matrix
         for look_at_translation_offset in look_at_translation_offsets
     ]
     if not look_at_translations:
         return None
 
     look_at_target_node_index = len(node_dicts)
-    look_at_default_node_translation = (
-        look_at_target_object.matrix_world.to_translation()
-    )
     node_dicts.append(
         {
             "name": look_at_target_object.name,
@@ -409,7 +400,7 @@ def create_look_at_animation(
     ]
     input_bytes = struct.pack("<" + "f" * len(input_floats), *input_floats)
     buffer0_bytearray.extend(input_bytes)
-    while len(buffer0_bytearray) % 32 != 0:  # TODO: Find the correct alignment
+    while len(buffer0_bytearray) % 32 != 0:  # TODO: 正しいアラインメントを調べる
         buffer0_bytearray.append(0)
     input_buffer_view_index = len(buffer_view_dicts)
     input_buffer_view_dict: dict[str, Json] = {
@@ -434,7 +425,7 @@ def create_look_at_animation(
         "<" + "f" * len(translation_floats), *translation_floats
     )
     buffer0_bytearray.extend(translation_bytes)
-    while len(buffer0_bytearray) % 32 != 0:  # TODO: Find the correct alignment
+    while len(buffer0_bytearray) % 32 != 0:  # TODO: 正しいアラインメントを調べる
         buffer0_bytearray.append(0)
     output_buffer_view_index = len(buffer_view_dicts)
     output_buffer_view_dict: dict[str, Json] = {
@@ -497,7 +488,7 @@ def create_look_at_animation(
         }
     )
 
-    return look_at_target_node_index
+    return None
 
 
 def create_expression_animation(
@@ -546,7 +537,7 @@ def create_expression_animation(
     ] = {}
 
     expression_export_index = 0
-    for fcurve in get_action_fcurves(action):
+    for fcurve in action.fcurves:
         if fcurve.mute:
             continue
         if not fcurve.is_valid:
@@ -601,7 +592,7 @@ def create_expression_animation(
         ]
         input_bytes = struct.pack("<" + "f" * len(input_floats), *input_floats)
         buffer0_bytearray.extend(input_bytes)
-        while len(buffer0_bytearray) % 32 != 0:  # TODO: Find the correct alignment
+        while len(buffer0_bytearray) % 32 != 0:  # TODO: 正しいアラインメントを調べる
             buffer0_bytearray.append(0)
         input_buffer_view_index = len(buffer_view_dicts)
         input_buffer_view_dict: dict[str, Json] = {
@@ -621,7 +612,7 @@ def create_expression_animation(
             *expression_translation_floats,
         )
         buffer0_bytearray.extend(translation_bytes)
-        while len(buffer0_bytearray) % 32 != 0:  # TODO: Find the correct alignment
+        while len(buffer0_bytearray) % 32 != 0:  # TODO: 正しいアラインメントを調べる
             buffer0_bytearray.append(0)
         output_buffer_view_index = len(buffer_view_dicts)
         output_buffer_view_dict: dict[str, Json] = {
@@ -720,7 +711,7 @@ def create_node_animation(
     bone_name_to_euler_offsets: dict[str, list[Euler]] = {}
     bone_name_to_axis_angle_offsets: dict[str, list[list[float]]] = {}
     hips_translation_offsets: list[Vector] = []
-    for fcurve in get_action_fcurves(action):
+    for fcurve in action.fcurves:
         if fcurve.mute:
             continue
         if not fcurve.is_valid:
@@ -793,8 +784,8 @@ def create_node_animation(
         if base_quaternion is None:
             continue
         bone_name_to_quaternions[bone_name] = [
-            # Muted items and other factors may cause quaternion values to be
-            # denormalized, so we normalize them
+            # ミュートされている項目とかあるとクオータニオンの値がノーマライズされて
+            # いないのでノーマライズしておく
             base_quaternion @ quaternion_offset.normalized()
             for quaternion_offset in quaternion_offsets
         ]
@@ -818,7 +809,7 @@ def create_node_animation(
             for axis_angle_offset in axis_angle_offsets
         ]
 
-    # Export rotation
+    # 回転のエクスポート
     for bone_name, quaternions in bone_name_to_quaternions.items():
         human_bone_name = next(
             (
@@ -844,7 +835,7 @@ def create_node_animation(
         ]
         input_bytes = struct.pack("<" + "f" * len(input_floats), *input_floats)
         buffer0_bytearray.extend(input_bytes)
-        while len(buffer0_bytearray) % 32 != 0:  # TODO: Find the correct alignment
+        while len(buffer0_bytearray) % 32 != 0:  # TODO: 正しいアラインメントを調べる
             buffer0_bytearray.append(0)
         input_buffer_view_index = len(buffer_view_dicts)
         input_buffer_view_dict: dict[str, Json] = {
@@ -870,7 +861,7 @@ def create_node_animation(
             "<" + "f" * len(quaternion_floats), *quaternion_floats
         )
         buffer0_bytearray.extend(quaternion_bytes)
-        while len(buffer0_bytearray) % 32 != 0:  # TODO: Find the correct alignment
+        while len(buffer0_bytearray) % 32 != 0:  # TODO: 正しいアラインメントを調べる
             buffer0_bytearray.append(0)
         output_buffer_view_index = len(buffer_view_dicts)
         output_buffer_view_dict: dict[str, Json] = {
@@ -931,7 +922,7 @@ def create_node_animation(
             }
         )
 
-    # Export hips translation
+    # hipsの平行移動のエクスポート
     hips_bone_name = human_bones.hips.node.bone_name
 
     hips_bone = armature.pose.bones.get(hips_bone_name)
@@ -947,7 +938,7 @@ def create_node_animation(
     else:
         base_matrix = Matrix()
     hips_translations = [
-        # TODO: Find the correct alignment
+        # TODO: 回転と同じように、RESTポーズとTポーズの差分を取るべき
         base_matrix @ hips_bone.matrix @ hips_translation_offset
         for hips_translation_offset in hips_translation_offsets
     ]
@@ -961,7 +952,7 @@ def create_node_animation(
     ]
     input_bytes = struct.pack("<" + "f" * len(input_floats), *input_floats)
     buffer0_bytearray.extend(input_bytes)
-    while len(buffer0_bytearray) % 32 != 0:  # TODO: Find the correct alignment
+    while len(buffer0_bytearray) % 32 != 0:  # TODO: 正しいアラインメントを調べる
         buffer0_bytearray.append(0)
     input_buffer_view_index = len(buffer_view_dicts)
     input_buffer_view_dict = {
@@ -986,7 +977,7 @@ def create_node_animation(
         "<" + "f" * len(translation_floats), *translation_floats
     )
     buffer0_bytearray.extend(translation_bytes)
-    while len(buffer0_bytearray) % 32 != 0:  # TODO: Find the correct alignment
+    while len(buffer0_bytearray) % 32 != 0:  # TODO: 正しいアラインメントを調べる
         buffer0_bytearray.append(0)
     output_buffer_view_index = len(buffer_view_dicts)
     output_buffer_view_dict = {
@@ -1045,31 +1036,3 @@ def create_node_animation(
             "target": {"node": hips_node_index, "path": "translation"},
         }
     )
-
-
-def get_action_fcurves(action: Action) -> Sequence[FCurve]:
-    if bpy.app.version < (4, 4):
-        return list(action.fcurves)
-
-    from bpy.types import ActionKeyframeStrip
-
-    # https://developer.blender.org/docs/release_notes/4.4/python_api/#deprecated
-    layers = action.layers
-    if not layers:
-        return []
-    layer = layers[0]
-
-    strips = layer.strips
-    if not strips:
-        return []
-    strip = strips[0]
-    if not isinstance(strip, ActionKeyframeStrip):
-        return []
-
-    slots = action.slots
-    if not slots:
-        return []
-    slot = slots[0]
-
-    channelbag = strip.channelbag(slot)
-    return list(channelbag.fcurves)

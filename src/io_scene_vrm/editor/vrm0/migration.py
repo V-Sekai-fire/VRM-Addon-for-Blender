@@ -33,7 +33,7 @@ def read_textblock_json(context: Context, armature: Object, armature_key: str) -
         textblock = context.blend_data.texts.get(text_key)
     if not isinstance(textblock, Text):
         return None
-    textblock_str = "".join(line.body for line in textblock.lines)
+    textblock_str = "".join([line.body for line in textblock.lines])
     with contextlib.suppress(json.JSONDecodeError):
         return make_json(json.loads(textblock_str))
     return None
@@ -122,32 +122,32 @@ def migrate_vrm0_humanoid(
     if not isinstance(humanoid_dict, dict):
         return
 
-    arm_stretch = convert.float_or_none(humanoid_dict.get("armStretch"))
-    if arm_stretch is not None:
+    arm_stretch = humanoid_dict.get("armStretch")
+    if isinstance(arm_stretch, (int, float)):
         humanoid.arm_stretch = arm_stretch
 
-    leg_stretch = convert.float_or_none(humanoid_dict.get("legStretch"))
-    if leg_stretch is not None:
+    leg_stretch = humanoid_dict.get("legStretch")
+    if isinstance(leg_stretch, (int, float)):
         humanoid.leg_stretch = leg_stretch
 
-    upper_arm_twist = convert.float_or_none(humanoid_dict.get("upperArmTwist"))
-    if upper_arm_twist is not None:
+    upper_arm_twist = humanoid_dict.get("upperArmTwist")
+    if isinstance(upper_arm_twist, (int, float)):
         humanoid.upper_arm_twist = upper_arm_twist
 
-    lower_arm_twist = convert.float_or_none(humanoid_dict.get("lowerArmTwist"))
-    if lower_arm_twist is not None:
+    lower_arm_twist = humanoid_dict.get("lowerArmTwist")
+    if isinstance(lower_arm_twist, (int, float)):
         humanoid.lower_arm_twist = lower_arm_twist
 
-    upper_leg_twist = convert.float_or_none(humanoid_dict.get("upperLegTwist"))
-    if upper_leg_twist is not None:
+    upper_leg_twist = humanoid_dict.get("upperLegTwist")
+    if isinstance(upper_leg_twist, (int, float)):
         humanoid.upper_leg_twist = upper_leg_twist
 
-    lower_leg_twist = convert.float_or_none(humanoid_dict.get("lowerLegTwist"))
-    if lower_leg_twist is not None:
+    lower_leg_twist = humanoid_dict.get("lowerLegTwist")
+    if isinstance(lower_leg_twist, (int, float)):
         humanoid.lower_leg_twist = lower_leg_twist
 
-    feet_spacing = convert.float_or_none(humanoid_dict.get("feetSpacing"))
-    if feet_spacing is not None:
+    feet_spacing = humanoid_dict.get("feetSpacing")
+    if isinstance(feet_spacing, (int, float)):
         humanoid.feet_spacing = feet_spacing
 
     has_translation_dof = humanoid_dict.get("hasTranslationDoF")
@@ -165,7 +165,7 @@ def migrate_vrm0_first_person(
 
     first_person_bone = first_person_dict.get("firstPersonBone")
     if isinstance(first_person_bone, str):
-        first_person.first_person_bone.bone_name = first_person_bone
+        first_person.first_person_bone.set_bone_name(first_person_bone)
 
     first_person_bone_offset = convert.vrm_json_vector3_to_tuple(
         first_person_dict.get("firstPersonBoneOffset")
@@ -307,8 +307,8 @@ def migrate_vrm0_blend_shape_groups(
                         ):
                             bind.index = index
 
-                weight = convert.float_or_none(bind_dict.get("weight"))
-                if weight is not None:
+                weight = bind_dict.get("weight")
+                if isinstance(weight, (int, float)):
                     bind.weight = weight
 
         material_value_dicts = blend_shape_group_dict.get("materialValues")
@@ -335,8 +335,8 @@ def migrate_vrm0_blend_shape_groups(
                 target_value_vector = material_value_dict.get("targetValue")
                 if isinstance(target_value_vector, list):
                     for v in target_value_vector:
-                        material_value.target_value.add().value = convert.float_or(
-                            v, 0.0
+                        material_value.target_value.add().value = (
+                            v if isinstance(v, (int, float)) else 0
                         )
 
         is_binary = blend_shape_group_dict.get("isBinary")
@@ -368,7 +368,7 @@ def migrate_vrm0_secondary_animation(
     for bone_name, collider_objects in bone_name_to_collider_objects.items():
         collider_group = secondary_animation.collider_groups.add()
         collider_group.uuid = uuid.uuid4().hex
-        collider_group.node.bone_name = bone_name
+        collider_group.node.set_bone_name(bone_name)
         for collider_object in collider_objects:
             collider_prop = collider_group.colliders.add()
             collider_prop.bpy_object = collider_object
@@ -389,12 +389,12 @@ def migrate_vrm0_secondary_animation(
         if isinstance(comment, str):
             bone_group.comment = comment
 
-        stiffiness = convert.float_or_none(bone_group_dict.get("stiffiness"))
-        if stiffiness is not None:
+        stiffiness = bone_group_dict.get("stiffiness")
+        if isinstance(stiffiness, (int, float)):
             bone_group.stiffiness = stiffiness
 
-        gravity_power = convert.float_or_none(bone_group_dict.get("gravityPower"))
-        if gravity_power is not None:
+        gravity_power = bone_group_dict.get("gravityPower")
+        if isinstance(gravity_power, (int, float)):
             bone_group.gravity_power = gravity_power
 
         gravity_dir = convert.vrm_json_vector3_to_tuple(
@@ -405,16 +405,16 @@ def migrate_vrm0_secondary_animation(
             (x, y, z) = gravity_dir
             bone_group.gravity_dir = (x, z, y)
 
-        drag_force = convert.float_or_none(bone_group_dict.get("dragForce"))
-        if drag_force is not None:
+        drag_force = bone_group_dict.get("dragForce")
+        if isinstance(drag_force, (int, float)):
             bone_group.drag_force = drag_force
 
         center = bone_group_dict.get("center")
         if isinstance(center, str):
-            bone_group.center.bone_name = center
+            bone_group.center.set_bone_name(center)
 
-        hit_radius = convert.float_or_none(bone_group_dict.get("hitRadius"))
-        if hit_radius is not None:
+        hit_radius = bone_group_dict.get("hitRadius")
+        if isinstance(hit_radius, (int, float)):
             bone_group.hit_radius = hit_radius
 
         bones = bone_group_dict.get("bones")
@@ -423,7 +423,7 @@ def migrate_vrm0_secondary_animation(
                 bone_prop = bone_group.bones.add()
                 if not isinstance(bone, str):
                     continue
-                bone_prop.bone_name = bone
+                bone_prop.set_bone_name(bone)
 
         collider_group_node_names = bone_group_dict.get("colliderGroups")
         if not isinstance(collider_group_node_names, list):
@@ -484,7 +484,7 @@ def migrate_legacy_custom_properties(
 
         for human_bone in ext.vrm0.humanoid.human_bones:
             if human_bone.bone == human_bone_name:
-                human_bone.node.bone_name = bpy_bone_name
+                human_bone.node.set_bone_name(bpy_bone_name)
                 break
 
 
@@ -507,10 +507,9 @@ def migrate_link_to_bone_object(
     if tuple(ext.addon_version) >= (2, 3, 27):
         return
 
-    for (
-        bone_property_group,
-        _bone_property_group_type,
-    ) in BonePropertyGroup.get_all_bone_property_groups(armature):
+    for bone_property_group in BonePropertyGroup.get_all_bone_property_groups(armature):
+        bone_property_group.armature_data_name = armature_data.name
+
         link_to_bone = bone_property_group.get("link_to_bone")
         if not isinstance(link_to_bone, Object) or not link_to_bone.parent_bone:
             continue
@@ -528,10 +527,7 @@ def migrate_link_to_bone_object(
             bone_extension.uuid = uuid.uuid4().hex
         bone_property_group.bone_uuid = bone_extension.uuid
 
-    for (
-        bone_property_group,
-        _bone_property_group_type,
-    ) in BonePropertyGroup.get_all_bone_property_groups(armature):
+    for bone_property_group in BonePropertyGroup.get_all_bone_property_groups(armature):
         link_to_bone = bone_property_group.pop("link_to_bone", None)
         if not isinstance(link_to_bone, Object):
             continue
@@ -621,8 +617,8 @@ def fixup_humanoid_feet_spacing(armature_data: Armature) -> None:
     if tuple(ext.addon_version) >= (2, 18, 2):
         return
     humanoid = ext.vrm0.humanoid
-    feet_spacing = convert.float_or_none(humanoid.get("feet_spacing"))
-    if feet_spacing is not None:
+    feet_spacing = humanoid.get("feet_spacing")
+    if isinstance(feet_spacing, (int, float)):
         humanoid.feet_spacing = float(feet_spacing)
 
 
@@ -661,20 +657,6 @@ def migrate_auto_pose(_context: Context, armature_data: Armature) -> None:
         humanoid.pose = humanoid.POSE_CURRENT_POSE.identifier
 
 
-def migrate_saved_mesh_object_name_to_restore(
-    _context: Context, armature_data: Armature
-) -> None:
-    ext = get_armature_extension(armature_data)
-    if tuple(ext.addon_version) == ext.INITIAL_ADDON_VERSION or tuple(
-        ext.addon_version
-    ) >= (3, 9, 0):
-        return
-
-    for blend_shape_group in ext.vrm0.blend_shape_master.blend_shape_groups:
-        for bind in blend_shape_group.binds:
-            bind.mesh.saved_mesh_object_name_to_restore = bind.mesh.name
-
-
 def is_unnecessary(vrm0: Vrm0PropertyGroup) -> bool:
     if vrm0.humanoid.initial_automatic_bone_assignment:
         return False
@@ -703,7 +685,7 @@ def migrate(context: Context, vrm0: Vrm0PropertyGroup, armature: Object) -> None
     if not vrm0.first_person.first_person_bone.bone_name:
         for human_bone in vrm0.humanoid.human_bones:
             if human_bone.bone == "head":
-                vrm0.first_person.first_person_bone.bone_name = (
+                vrm0.first_person.first_person_bone.set_bone_name(
                     human_bone.node.bone_name
                 )
                 break
@@ -715,7 +697,6 @@ def migrate(context: Context, vrm0: Vrm0PropertyGroup, armature: Object) -> None
     fixup_humanoid_feet_spacing(armature_data)
     migrate_pose(context, armature, armature_data)
     migrate_auto_pose(context, armature_data)
-    migrate_saved_mesh_object_name_to_restore(context, armature_data)
 
     Vrm0HumanoidPropertyGroup.update_all_node_candidates(
         context,
@@ -727,5 +708,5 @@ def migrate(context: Context, vrm0: Vrm0PropertyGroup, armature: Object) -> None
         vrm0.humanoid.initial_automatic_bone_assignment = False
         if all(not b.node.bone_name for b in vrm0.humanoid.human_bones):
             ops.vrm.assign_vrm0_humanoid_human_bones_automatically(
-                armature_object_name=armature.name
+                armature_name=armature.name
             )

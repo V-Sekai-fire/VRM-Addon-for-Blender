@@ -1,10 +1,7 @@
 # SPDX-License-Identifier: MIT OR GPL-3.0-or-later
-from collections.abc import Mapping
-from typing import Final
-
 from ..vrm1.human_bone import HumanBoneSpecification, HumanBoneSpecifications
 
-MAPPING_TEMPLATE: Final[Mapping[str, HumanBoneSpecification]] = {
+mapping_template: dict[str, HumanBoneSpecification] = {
     "Head": HumanBoneSpecifications.HEAD,
     "REye": HumanBoneSpecifications.RIGHT_EYE,
     "LEye": HumanBoneSpecifications.LEFT_EYE,
@@ -62,8 +59,8 @@ MAPPING_TEMPLATE: Final[Mapping[str, HumanBoneSpecification]] = {
 
 
 def prefixed_mapping(key_prefix: str) -> dict[str, HumanBoneSpecification]:
-    return {key_prefix + k: v for k, v in MAPPING_TEMPLATE.items()}
+    return {key_prefix + k: v for k, v in mapping_template.items()}
 
 
-CONFIG_BIP01: Final = ("Microsoft Rocketbox (Bip01)", prefixed_mapping("Bip01 "))
-CONFIG_BIP02: Final = ("Microsoft Rocketbox (Bip02)", prefixed_mapping("Bip02 "))
+config_bip01 = ("Microsoft Rocketbox (Bip01)", prefixed_mapping("Bip01 "))
+config_bip02 = ("Microsoft Rocketbox (Bip02)", prefixed_mapping("Bip02 "))

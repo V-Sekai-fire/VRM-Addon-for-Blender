@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: MIT OR GPL-3.0-or-later
+import math
 import random
 import string
 import time
@@ -76,6 +77,7 @@ from bpy.types import (
     ShaderNodeTexImage,
     ShaderNodeTexMagic,
     ShaderNodeTexNoise,
+    ShaderNodeTexPointDensity,
     ShaderNodeTexSky,
     ShaderNodeTexVoronoi,
     ShaderNodeTexWave,
@@ -96,7 +98,7 @@ from .char import INTERNAL_NAME_PREFIX
 from .gl import GL_CLAMP_TO_EDGE, GL_LINEAR, GL_NEAREST, GL_REPEAT
 from .logger import get_logger
 from .version import get_addon_version
-from .workspace import wm_append_without_library
+from .workspace import save_workspace, wm_append_without_library
 
 logger = get_logger(__name__)
 
@@ -134,11 +136,6 @@ VECTOR_SOCKET_CLASSES: Final = (
 COLOR_SOCKET_CLASSES: Final = (NodeSocketColor,)
 STRING_SOCKET_CLASSES: Final = (NodeSocketString,)
 
-MTOON1_AUTO_SETUP_GROUP_NAME: Final = "MToon"
-MTOON1_AUTO_SETUP_GROUP_NODE_TREE_CUSTOM_KEY: Final = (
-    "VRM Add-on MToon1 Auto Setup Placeholder"
-)
-
 OUTLINE_GEOMETRY_GROUP_NAME: Final = "VRM Add-on MToon 1.0 Outline Geometry Revision 1"
 
 UV_GROUP_NAME: Final = "VRM Add-on MToon 1.0 UV Revision 1"
@@ -172,8 +169,6 @@ NORMAL_GROUP_NAME: Final = "VRM Add-on MToon 1.0 Normal Revision 1"
 NORMAL_GROUP_SCALE_LABEL: Final = "Normal Map Texture Scale"
 NORMAL_GROUP_SCALE_DEFAULT: Final = 1.0
 NORMAL_GROUP_IS_OUTLINE_LABEL: Final = "Is Outline"
-
-MATCAP_UV_GROUP_NAME: Final = "VRM Add-on MToon 1.0 MatCap UV Revision 1"
 
 OUTPUT_GROUP_NAME: Final = "VRM Add-on MToon 1.0 Output Revision 1"
 OUTPUT_GROUP_DOUBLE_SIDED_LABEL: Final = "Double Sided"
@@ -227,7 +222,6 @@ OUTPUT_GROUP_ALPHA_CUTOFF_LABEL: Final = "Alpha Cutoff"
 OUTPUT_GROUP_ALPHA_CUTOFF_DEFAULT: Final = 0.5
 
 SHADER_NODE_GROUP_NAMES: Final = (
-    MATCAP_UV_GROUP_NAME,
     UV_GROUP_NAME,
     UV_ANIMATION_GROUP_NAME,
     NORMAL_GROUP_NAME,
@@ -252,36 +246,20 @@ def generate_backup_suffix() -> str:
     )
 
 
-def get_mtoon1_auto_setup_shader_node_group(context: Context) -> Optional[NodeTree]:
-    node_group = context.blend_data.node_groups.get(MTOON1_AUTO_SETUP_GROUP_NAME)
-    if not node_group:
-        return None
-    if node_group.get(MTOON1_AUTO_SETUP_GROUP_NODE_TREE_CUSTOM_KEY):
-        return node_group
-    return None
-
-
-def add_mtoon1_auto_setup_shader_node_group(context: Context) -> None:
-    blend_path = Path(__file__).with_name("mtoon_auto_setup.blend")
+def add_shaders(context: Context) -> None:
+    blend_path = Path(__file__).with_name("mtoon0.blend")
     node_tree_path = str(blend_path) + "/NodeTree"
 
-    if get_mtoon1_auto_setup_shader_node_group(context):
-        return
-
-    wm_append_without_library(
-        context,
-        blend_path,
-        append_filepath=node_tree_path + "/" + MTOON1_AUTO_SETUP_GROUP_NAME,
-        append_filename=MTOON1_AUTO_SETUP_GROUP_NAME,
-        append_directory=node_tree_path,
-    )
-
-
-def remove_mtoon1_auto_setup_shader_node_group(context: Context) -> None:
-    node_group = get_mtoon1_auto_setup_shader_node_group(context)
-    if not node_group or node_group.users:
-        return
-    context.blend_data.node_groups.remove(node_group)
+    for shader_node_group_name in ["matcap_vector", "MToon_unversioned"]:
+        if shader_node_group_name in context.blend_data.node_groups:
+            continue
+        wm_append_without_library(
+            context,
+            blend_path,
+            append_filepath=node_tree_path + "/" + shader_node_group_name,
+            append_filename=shader_node_group_name,
+            append_directory=node_tree_path,
+        )
 
 
 def load_mtoon1_node_group(
@@ -329,18 +307,21 @@ def load_mtoon1_node_group(
         )
 
     node_tree_path = str(blend_file_path) + "/NodeTree"
-    node_tree_append_result = wm_append_without_library(
-        context,
-        blend_file_path,
-        append_filepath=(node_tree_path + "/" + template_node_group_name),
-        append_filename=template_node_group_name,
-        append_directory=node_tree_path,
-    )
-    if node_tree_append_result != {"FINISHED"}:
-        raise RuntimeError(
-            "Failed to append MToon 1.0 template node group "
-            + f'"{template_node_group_name}": {node_tree_append_result}'
+
+    # https://projects.blender.org/blender/blender/src/tag/v2.93.18/source/blender/windowmanager/intern/wm_files_link.c#L85-L90
+    with save_workspace(context):
+        node_tree_append_result = wm_append_without_library(
+            context,
+            blend_file_path,
+            append_filepath=(node_tree_path + "/" + template_node_group_name),
+            append_filename=template_node_group_name,
+            append_directory=node_tree_path,
         )
+        if node_tree_append_result != {"FINISHED"}:
+            raise RuntimeError(
+                "Failed to append MToon 1.0 template node group "
+                + f'"{template_node_group_name}": {node_tree_append_result}'
+            )
 
     template_node_group = None
     try:
@@ -359,17 +340,10 @@ def load_mtoon1_node_group(
         copy_node_tree(context, template_node_group, node_group)
         get_node_tree_extension(node_group).addon_version = get_addon_version()
     finally:
-        if template_node_group:
-            if template_node_group.users:
-                logger.warning(
-                    'Failed to remove "%s" with %d users while loading mtoon shader',
-                    template_node_group.name,
-                    template_node_group.users,
-                )
-            else:
-                context.blend_data.node_groups.remove(template_node_group)
+        if template_node_group and template_node_group.users <= 1:
+            context.blend_data.node_groups.remove(template_node_group)
 
-        # Logically, it may have already been removed, so retrieve it again
+        # プログラムロジック的には既にremoveされている可能性もあるので、取得しなおす
         old_template_node_group = context.blend_data.node_groups.get(
             backup_name(template_node_group_name, backup_suffix)
         )
@@ -432,16 +406,16 @@ def load_mtoon1_shader(
 
     backup_suffix = generate_backup_suffix()
 
-    # Back up if there are materials with the same name as the one being appended.
-    # In the future, this will be replaced with append(do_reuse_local_id=True).
+    # アペンドされるマテリアルと同名のものある場合は退避する。
+    # 将来的にはappend(do_reuse_local_id=True)で代替する。
     template_material_name = template_name("VRM Add-on MToon 1.0")
     old_material = context.blend_data.materials.get(template_material_name)
     if old_material:
         logger.error('Material "%s" already exists', template_material_name)
         old_material.name = backup_name(old_material.name, backup_suffix)
 
-    # When appending a Material, NodeTree is also appended simultaneously.
-    # Back up if NodeTree with the same name exists.
+    # Materialをアペンドする際にNodeTreeも同時にアペンドされる。
+    # それらと同名のNodeTreeが存在する場合は退避する。
     for shader_node_group_name in SHADER_NODE_GROUP_NAMES:
         name = template_name(shader_node_group_name)
         old_template_group = context.blend_data.node_groups.get(name)
@@ -453,19 +427,22 @@ def load_mtoon1_shader(
 
     blend_file_path = Path(__file__).with_name("mtoon1.blend")
     material_path = str(blend_file_path) + "/Material"
-    material_append_result = wm_append_without_library(
-        context,
-        blend_file_path,
-        append_filepath=material_path + "/" + template_material_name,
-        append_filename=template_material_name,
-        append_directory=material_path,
-        # do_reuse_local_id=True
-    )
-    if material_append_result != {"FINISHED"}:
-        raise RuntimeError(
-            "Failed to append MToon 1.0 template material: "
-            + f"{material_append_result}"
+
+    # https://projects.blender.org/blender/blender/src/tag/v2.93.18/source/blender/windowmanager/intern/wm_files_link.c#L85-L90
+    with save_workspace(context):
+        material_append_result = wm_append_without_library(
+            context,
+            blend_file_path,
+            append_filepath=material_path + "/" + template_material_name,
+            append_filename=template_material_name,
+            append_directory=material_path,
+            # do_reuse_local_id=True
         )
+        if material_append_result != {"FINISHED"}:
+            raise RuntimeError(
+                "Failed to append MToon 1.0 template material: "
+                + f"{material_append_result}"
+            )
 
     template_material = None
     try:
@@ -481,41 +458,26 @@ def load_mtoon1_shader(
         else:
             copy_node_tree(context, template_material_node_tree, material_node_tree)
     finally:
-        if template_material:
-            if template_material.users:
-                logger.warning(
-                    'Failed to remove "%s" with %d users while loading mtoon shader',
-                    template_material.name,
-                    template_material.users,
-                )
-            else:
-                context.blend_data.materials.remove(template_material)
+        if template_material and template_material.users <= 1:
+            context.blend_data.materials.remove(template_material)
 
-        # Remove NodeTree that was appended simultaneously when appending Material
+        # Materialをアペンドする際に同時にアペンドされたNodeTreeを削除
         for shader_node_group_name in SHADER_NODE_GROUP_NAMES:
             shader_node_group_template_name = template_name(shader_node_group_name)
             template_group = context.blend_data.node_groups.get(
                 shader_node_group_template_name
             )
-            if template_group:
-                if template_group.users:
-                    logger.warning(
-                        'Failed to remove "%s" with %d users'
-                        " while loading mtoon shader",
-                        template_group.name,
-                        template_group.users,
-                    )
-                else:
-                    context.blend_data.node_groups.remove(template_group)
+            if template_group and template_group.users <= 1:
+                context.blend_data.node_groups.remove(template_group)
 
-        # Logically, it may have already been removed, so retrieve it again
+        # プログラムロジック的には既にremoveされている可能性もあるので、取得しなおす
         old_material = context.blend_data.materials.get(
             backup_name(template_material_name, backup_suffix)
         )
         if old_material:
             old_material.name = template_material_name
 
-        # Restore the backed up NodeTree
+        # 退避していたNodeTreeを復元する
         for shader_node_group_name in SHADER_NODE_GROUP_NAMES:
             name = template_name(shader_node_group_name)
             old_template_group = context.blend_data.node_groups.get(
@@ -534,20 +496,13 @@ def load_mtoon1_shader(
 
 
 def copy_socket(from_socket: NodeSocket, to_socket: NodeSocket) -> None:
-    if to_socket.display_shape != from_socket.display_shape:
-        to_socket.display_shape = from_socket.display_shape
-    if to_socket.enabled != from_socket.enabled:
-        to_socket.enabled = from_socket.enabled
-    if to_socket.hide != from_socket.hide:
-        to_socket.hide = from_socket.hide
-    if to_socket.hide_value != from_socket.hide_value:
-        to_socket.hide_value = from_socket.hide_value
-    if to_socket.link_limit != from_socket.link_limit:
-        to_socket.link_limit = from_socket.link_limit
-    if to_socket.name != from_socket.name:
-        to_socket.name = from_socket.name
-    if to_socket.show_expanded != from_socket.show_expanded:
-        to_socket.show_expanded = from_socket.show_expanded
+    to_socket.display_shape = from_socket.display_shape
+    to_socket.enabled = from_socket.enabled
+    to_socket.hide = from_socket.hide
+    to_socket.hide_value = from_socket.hide_value
+    to_socket.link_limit = from_socket.link_limit
+    to_socket.name = from_socket.name
+    to_socket.show_expanded = from_socket.show_expanded
     if to_socket.type != from_socket.type:
         to_socket.type = from_socket.type
 
@@ -637,44 +592,36 @@ def copy_socket_default_value(
 ) -> None:
     if isinstance(from_socket, SCALAR_SOCKET_CLASSES):
         if isinstance(to_socket, BOOL_SOCKET_CLASSES):
-            default_bool_value = bool(from_socket.default_value)
-            if to_socket.default_value != default_bool_value:
-                to_socket.default_value = default_bool_value
+            to_socket.default_value = bool(from_socket.default_value)
         elif isinstance(to_socket, FLOAT_SOCKET_CLASSES):
-            default_float_value = float(from_socket.default_value)
-            if to_socket.default_value != default_float_value:
-                to_socket.default_value = default_float_value
+            to_socket.default_value = float(from_socket.default_value)
         elif isinstance(to_socket, INT_SOCKET_CLASSES):
-            default_int_value = int(from_socket.default_value)
-            if to_socket.default_value != default_int_value:
-                to_socket.default_value = default_int_value
+            to_socket.default_value = int(from_socket.default_value)
     elif isinstance(from_socket, VECTOR_SOCKET_CLASSES) and isinstance(
         to_socket, VECTOR_SOCKET_CLASSES
     ):
-        default_vector_value = (
-            from_socket.default_value[0],
-            from_socket.default_value[1],
-            from_socket.default_value[2],
+        to_socket.default_value = deepcopy(
+            (
+                from_socket.default_value[0],
+                from_socket.default_value[1],
+                from_socket.default_value[2],
+            )
         )
-        if tuple(to_socket.default_value) != default_vector_value:
-            to_socket.default_value = default_vector_value
     elif isinstance(from_socket, COLOR_SOCKET_CLASSES) and isinstance(
         to_socket, COLOR_SOCKET_CLASSES
     ):
-        default_color_value = (
-            from_socket.default_value[0],
-            from_socket.default_value[1],
-            from_socket.default_value[2],
-            from_socket.default_value[3],
+        to_socket.default_value = deepcopy(
+            (
+                from_socket.default_value[0],
+                from_socket.default_value[1],
+                from_socket.default_value[2],
+                from_socket.default_value[3],
+            )
         )
-        if tuple(to_socket.default_value) != default_color_value:
-            to_socket.default_value = default_color_value
     elif isinstance(from_socket, STRING_SOCKET_CLASSES) and isinstance(
         to_socket, STRING_SOCKET_CLASSES
     ):
-        default_string_value = from_socket.default_value
-        if to_socket.default_value != default_string_value:
-            to_socket.default_value = default_string_value
+        to_socket.default_value = deepcopy(from_socket.default_value)
 
 
 def copy_node_socket_default_value(
@@ -725,444 +672,307 @@ def copy_node(
     to_node: Node,
     from_to: dict[Node, Node],
 ) -> None:
-    # ruff: noqa: SIM102  Disable SIM102 only in this function to improve if statement readability
-
-    from_node_color = (
-        from_node.color[0],
-        from_node.color[1],
-        from_node.color[2],
+    to_node.color = deepcopy(
+        (
+            from_node.color[0],
+            from_node.color[1],
+            from_node.color[2],
+        )
     )
-    if tuple(to_node.color) != from_node_color:
-        to_node.color = from_node_color
-
-    if to_node.height != from_node.height:
-        to_node.height = from_node.height
-
-    if to_node.hide != from_node.hide:
-        to_node.hide = from_node.hide
-
+    to_node.height = from_node.height
+    to_node.hide = from_node.hide
     for index, from_input in enumerate(from_node.inputs):
         if 0 <= index < len(to_node.inputs):
             to_input = to_node.inputs[index]
             copy_socket(from_input, to_input)
-
-    if to_node.label != from_node.label:
-        to_node.label = from_node.label
-
-    from_node_location = (
-        from_node.location[0],
-        from_node.location[1],
+    to_node.label = from_node.label
+    to_node.location = deepcopy(
+        (
+            from_node.location[0],
+            from_node.location[1],
+        )
     )
-    if tuple(to_node.location) != from_node_location:
-        to_node.location = from_node_location
-
-    if to_node.mute != from_node.mute:
-        to_node.mute = from_node.mute
-
-    if to_node.name != from_node.name:
-        to_node.name = from_node.name
-
+    to_node.mute = from_node.mute
+    to_node.name = from_node.name
     for index, from_output in enumerate(from_node.outputs):
         if 0 <= index < len(to_node.outputs):
             to_output = to_node.outputs[index]
             copy_socket(from_output, to_output)
-
-    from_node_parent = from_node.parent
-    if from_node_parent:
-        to_node_parent = from_to.get(from_node_parent)
-        if to_node.parent != to_node_parent:
-            to_node.parent = to_node_parent
-
-    if to_node.select:
-        to_node.select = False
-
-    if to_node.show_options != from_node.show_options:
-        to_node.show_options = from_node.show_options
-
-    if to_node.show_preview != from_node.show_preview:
-        to_node.show_preview = from_node.show_preview
-
-    if to_node.show_texture:
-        to_node.show_texture = False
-
-    if to_node.use_custom_color != from_node.use_custom_color:
-        to_node.use_custom_color = from_node.use_custom_color
-
-    if to_node.width != from_node.width:
-        to_node.width = from_node.width
+    if from_node.parent:
+        to_node.parent = from_to.get(from_node.parent)
+    to_node.select = False
+    to_node.show_options = from_node.show_options
+    to_node.show_preview = from_node.show_preview
+    to_node.show_texture = False
+    to_node.use_custom_color = from_node.use_custom_color
+    to_node.width = from_node.width
 
     if isinstance(from_node, NodeFrame) and isinstance(to_node, NodeFrame):
-        if to_node.shrink != from_node.shrink:
-            to_node.shrink = from_node.shrink
-        if to_node.label_size != from_node.label_size:
-            to_node.label_size = from_node.label_size
-        if to_node.text != from_node.text:
-            to_node.text = from_node.text
+        to_node.shrink = from_node.shrink
+        to_node.label_size = from_node.label_size
+        to_node.text = from_node.text
     if isinstance(from_node, NodeGroup):
         logger.error("Importing NodeGroup doesn't be supported yet")
     if isinstance(from_node, NodeGroupOutput) and isinstance(to_node, NodeGroupOutput):
-        if to_node.is_active_output != from_node.is_active_output:
-            to_node.is_active_output = from_node.is_active_output
+        to_node.is_active_output = from_node.is_active_output
     if isinstance(from_node, ShaderNodeWireframe) and isinstance(
         to_node, ShaderNodeWireframe
     ):
-        if to_node.use_pixel_size != from_node.use_pixel_size:
-            to_node.use_pixel_size = from_node.use_pixel_size
+        to_node.use_pixel_size = from_node.use_pixel_size
     if isinstance(from_node, ShaderNodeVertexColor) and isinstance(
         to_node, ShaderNodeVertexColor
     ):
-        if to_node.layer_name != from_node.layer_name:
-            to_node.layer_name = from_node.layer_name
+        to_node.layer_name = from_node.layer_name
     if isinstance(from_node, ShaderNodeVectorTransform) and isinstance(
         to_node, ShaderNodeVectorTransform
     ):
-        if to_node.convert_from != from_node.convert_from:
-            to_node.convert_from = from_node.convert_from
-        if to_node.convert_to != from_node.convert_to:
-            to_node.convert_to = from_node.convert_to
-        if to_node.vector_type != from_node.vector_type:
-            to_node.vector_type = from_node.vector_type
+        to_node.convert_from = from_node.convert_from
+        to_node.convert_to = from_node.convert_to
+        to_node.vector_type = from_node.vector_type
     if isinstance(from_node, ShaderNodeVectorRotate) and isinstance(
         to_node, ShaderNodeVectorRotate
     ):
-        if to_node.invert != from_node.invert:
-            to_node.invert = from_node.invert
-        if to_node.rotation_type != from_node.rotation_type:
-            to_node.rotation_type = from_node.rotation_type
+        to_node.invert = from_node.invert
+        to_node.rotation_type = from_node.rotation_type
     if isinstance(from_node, ShaderNodeVectorMath) and isinstance(
         to_node, ShaderNodeVectorMath
     ):
-        if to_node.operation != from_node.operation:
-            to_node.operation = from_node.operation
+        to_node.operation = from_node.operation
     if isinstance(from_node, ShaderNodeVectorDisplacement) and isinstance(
         to_node, ShaderNodeVectorDisplacement
     ):
-        if to_node.space != from_node.space:
-            to_node.space = from_node.space
+        to_node.space = from_node.space
     if isinstance(from_node, ShaderNodeUVMap) and isinstance(to_node, ShaderNodeUVMap):
-        if to_node.from_instancer != from_node.from_instancer:
-            to_node.from_instancer = from_node.from_instancer
-        if to_node.uv_map != from_node.uv_map:
-            to_node.uv_map = from_node.uv_map
+        to_node.from_instancer = from_node.from_instancer
+        to_node.uv_map = from_node.uv_map
     if isinstance(from_node, ShaderNodeUVAlongStroke) and isinstance(
         to_node, ShaderNodeUVAlongStroke
     ):
-        if to_node.use_tips != from_node.use_tips:
-            to_node.use_tips = from_node.use_tips
+        to_node.use_tips = from_node.use_tips
     if isinstance(from_node, ShaderNodeTexWhiteNoise) and isinstance(
         to_node, ShaderNodeTexWhiteNoise
     ):
-        if to_node.noise_dimensions != from_node.noise_dimensions:
-            to_node.noise_dimensions = from_node.noise_dimensions
+        to_node.noise_dimensions = from_node.noise_dimensions
     if isinstance(from_node, ShaderNodeTexWave) and isinstance(
         to_node, ShaderNodeTexWave
     ):
         # incomplete
-        if to_node.bands_direction != from_node.bands_direction:
-            to_node.bands_direction = from_node.bands_direction
-        from_node_color_mapping_blend_color = (
-            from_node.color_mapping.blend_color[0],
-            from_node.color_mapping.blend_color[1],
-            from_node.color_mapping.blend_color[2],
+        to_node.bands_direction = from_node.bands_direction
+        to_node.color_mapping.blend_color = deepcopy(
+            (
+                from_node.color_mapping.blend_color[0],
+                from_node.color_mapping.blend_color[1],
+                from_node.color_mapping.blend_color[2],
+            )
         )
-        if (
-            tuple(to_node.color_mapping.blend_color)
-            != from_node_color_mapping_blend_color
-        ):
-            to_node.color_mapping.blend_color = from_node_color_mapping_blend_color
-        if to_node.color_mapping.blend_type != from_node.color_mapping.blend_type:
-            to_node.color_mapping.blend_type = from_node.color_mapping.blend_type
-        if to_node.color_mapping.brightness != from_node.color_mapping.brightness:
-            to_node.color_mapping.brightness = from_node.color_mapping.brightness
-        if to_node.color_mapping.color_ramp.color_mode != (
+        to_node.color_mapping.blend_type = from_node.color_mapping.blend_type
+        to_node.color_mapping.brightness = from_node.color_mapping.brightness
+        to_node.color_mapping.color_ramp.color_mode = (
             from_node.color_mapping.color_ramp.color_mode
-        ):
-            to_node.color_mapping.color_ramp.color_mode = (
-                from_node.color_mapping.color_ramp.color_mode
-            )
-        if to_node.color_mapping.contrast != from_node.color_mapping.contrast:
-            to_node.color_mapping.contrast = from_node.color_mapping.contrast
-        if to_node.color_mapping.saturation != from_node.color_mapping.saturation:
-            to_node.color_mapping.saturation = from_node.color_mapping.saturation
-        if (
-            to_node.color_mapping.use_color_ramp
-            != from_node.color_mapping.use_color_ramp
-        ):
-            to_node.color_mapping.use_color_ramp = (
-                from_node.color_mapping.use_color_ramp
-            )
-        if to_node.rings_direction != from_node.rings_direction:
-            to_node.rings_direction = from_node.rings_direction
-        if to_node.wave_profile != from_node.wave_profile:
-            to_node.wave_profile = from_node.wave_profile
-        if to_node.wave_type != from_node.wave_type:
-            to_node.wave_type = from_node.wave_type
+        )
+        to_node.color_mapping.contrast = from_node.color_mapping.contrast
+        to_node.color_mapping.saturation = from_node.color_mapping.saturation
+        to_node.color_mapping.use_color_ramp = from_node.color_mapping.use_color_ramp
+        to_node.rings_direction = from_node.rings_direction
+        to_node.wave_profile = from_node.wave_profile
+        to_node.wave_type = from_node.wave_type
     if isinstance(from_node, ShaderNodeTexVoronoi) and isinstance(
         to_node, ShaderNodeTexVoronoi
     ):
-        if to_node.distance != from_node.distance:
-            to_node.distance = from_node.distance
-        if to_node.feature != from_node.feature:
-            to_node.feature = from_node.feature
-        if to_node.voronoi_dimensions != from_node.voronoi_dimensions:
-            to_node.voronoi_dimensions = from_node.voronoi_dimensions
+        to_node.distance = from_node.distance
+        to_node.feature = from_node.feature
+        to_node.voronoi_dimensions = from_node.voronoi_dimensions
     if isinstance(from_node, ShaderNodeTexSky) and isinstance(
         to_node, ShaderNodeTexSky
     ):
-        if to_node.ground_albedo != from_node.ground_albedo:
-            to_node.ground_albedo = from_node.ground_albedo
-        if to_node.sky_type != from_node.sky_type:
-            to_node.sky_type = from_node.sky_type
-        from_node_sun_direction = (
-            from_node.sun_direction[0],
-            from_node.sun_direction[1],
-            from_node.sun_direction[2],
-        )
-        if tuple(to_node.sun_direction) != from_node_sun_direction:
-            to_node.sun_direction = from_node_sun_direction
-        if to_node.turbidity != from_node.turbidity:
-            to_node.turbidity = from_node.turbidity
+        to_node.ground_albedo = from_node.ground_albedo
+        to_node.sky_type = from_node.sky_type
+        to_node.sun_direction = from_node.sun_direction[:]
+        to_node.turbidity = from_node.turbidity
+    if isinstance(from_node, ShaderNodeTexPointDensity) and isinstance(
+        to_node, ShaderNodeTexPointDensity
+    ):
+        to_node.interpolation = from_node.interpolation
+        to_node.object = from_node.object
+        to_node.particle_color_source = from_node.particle_color_source
+        to_node.point_source = from_node.point_source
+        to_node.radius = from_node.radius
+        to_node.resolution = from_node.resolution
+        to_node.space = from_node.space
+        to_node.vertex_attribute_name = from_node.vertex_attribute_name
+        to_node.vertex_color_source = from_node.vertex_color_source
     if isinstance(from_node, ShaderNodeTexNoise) and isinstance(
         to_node, ShaderNodeTexNoise
     ):
-        if to_node.noise_dimensions != from_node.noise_dimensions:
-            to_node.noise_dimensions = from_node.noise_dimensions
+        to_node.noise_dimensions = from_node.noise_dimensions
     if isinstance(from_node, ShaderNodeTexMagic) and isinstance(
         to_node, ShaderNodeTexMagic
     ):
-        if to_node.turbulence_depth != from_node.turbulence_depth:
-            to_node.turbulence_depth = from_node.turbulence_depth
+        to_node.turbulence_depth = from_node.turbulence_depth
     if isinstance(from_node, ShaderNodeTexImage) and isinstance(
         to_node, ShaderNodeTexImage
     ):
-        if to_node.extension != from_node.extension:
-            to_node.extension = from_node.extension
+        to_node.extension = from_node.extension
         # to_node.image = from_node.image
-        if to_node.interpolation != from_node.interpolation:
-            to_node.interpolation = from_node.interpolation
-        if to_node.projection != from_node.projection:
-            to_node.projection = from_node.projection
-        if to_node.projection_blend != from_node.projection_blend:
-            to_node.projection_blend = from_node.projection_blend
+        to_node.interpolation = from_node.interpolation
+        to_node.projection = from_node.projection
+        to_node.projection_blend = from_node.projection_blend
         if to_node.name == "Mtoon1BaseColorTexture.Image":
-            if not to_node.select:
-                to_node.select = True
-            if not to_node.show_texture:
-                to_node.show_texture = True
+            to_node.select = True
+            to_node.show_texture = True
     if isinstance(from_node, ShaderNodeTexIES) and isinstance(
         to_node, ShaderNodeTexIES
     ):
-        if to_node.filepath != from_node.filepath:
-            to_node.filepath = from_node.filepath
-        if to_node.ies != from_node.ies:
-            to_node.ies = from_node.ies
-        if to_node.mode != from_node.mode:
-            to_node.mode = from_node.mode
+        to_node.filepath = from_node.filepath
+        to_node.ies = from_node.ies
+        to_node.mode = from_node.mode
     if isinstance(from_node, ShaderNodeTexGradient) and isinstance(
         to_node, ShaderNodeTexGradient
     ):
-        if to_node.gradient_type != from_node.gradient_type:
-            to_node.gradient_type = from_node.gradient_type
+        to_node.gradient_type = from_node.gradient_type
     if isinstance(from_node, ShaderNodeTexEnvironment) and isinstance(
         to_node, ShaderNodeTexEnvironment
     ):
-        if to_node.image != from_node.image:
-            to_node.image = from_node.image
-        if to_node.interpolation != from_node.interpolation:
-            to_node.interpolation = from_node.interpolation
-        if to_node.projection != from_node.projection:
-            to_node.projection = from_node.projection
+        to_node.image = from_node.image
+        to_node.interpolation = from_node.interpolation
+        to_node.projection = from_node.projection
     if isinstance(from_node, ShaderNodeTexCoord) and isinstance(
         to_node, ShaderNodeTexCoord
     ):
-        if to_node.from_instancer != from_node.from_instancer:
-            to_node.from_instancer = from_node.from_instancer
-        if to_node.object != from_node.object:
-            to_node.object = from_node.object
+        to_node.from_instancer = from_node.from_instancer
+        to_node.object = from_node.object
     if isinstance(from_node, ShaderNodeTexBrick) and isinstance(
         to_node, ShaderNodeTexBrick
     ):
-        if to_node.offset != from_node.offset:
-            to_node.offset = from_node.offset
-        if to_node.offset_frequency != from_node.offset_frequency:
-            to_node.offset_frequency = from_node.offset_frequency
-        if to_node.squash != from_node.squash:
-            to_node.squash = from_node.squash
-        if to_node.squash_frequency != from_node.squash_frequency:
-            to_node.squash_frequency = from_node.squash_frequency
+        to_node.offset = from_node.offset
+        to_node.offset_frequency = from_node.offset_frequency
+        to_node.squash = from_node.squash
+        to_node.squash_frequency = from_node.squash_frequency
     if isinstance(from_node, ShaderNodeTangent) and isinstance(
         to_node, ShaderNodeTangent
     ):
-        if to_node.axis != from_node.axis:
-            to_node.axis = from_node.axis
-        if to_node.direction_type != from_node.direction_type:
-            to_node.direction_type = from_node.direction_type
-        if to_node.uv_map != from_node.uv_map:
-            to_node.uv_map = from_node.uv_map
+        to_node.axis = from_node.axis
+        to_node.direction_type = from_node.direction_type
+        to_node.uv_map = from_node.uv_map
     if isinstance(from_node, ShaderNodeSubsurfaceScattering) and isinstance(
         to_node, ShaderNodeSubsurfaceScattering
     ):
-        if to_node.falloff != from_node.falloff:
-            to_node.falloff = from_node.falloff
+        to_node.falloff = from_node.falloff
     if isinstance(from_node, ShaderNodeScript) and isinstance(
         to_node, ShaderNodeScript
     ):
-        if to_node.bytecode != from_node.bytecode:
-            to_node.bytecode = from_node.bytecode
-        if to_node.bytecode_hash != from_node.bytecode_hash:
-            to_node.bytecode_hash = from_node.bytecode_hash
-        if to_node.filepath != from_node.filepath:
-            to_node.filepath = from_node.filepath
-        if to_node.mode != from_node.mode:
-            to_node.mode = from_node.mode
-        if to_node.script != from_node.script:
-            to_node.script = from_node.script
-        if to_node.use_auto_update != from_node.use_auto_update:
-            to_node.use_auto_update = from_node.use_auto_update
+        to_node.bytecode = from_node.bytecode
+        to_node.bytecode_hash = from_node.bytecode_hash
+        to_node.filepath = from_node.filepath
+        to_node.mode = from_node.mode
+        to_node.script = from_node.script
+        to_node.use_auto_update = from_node.use_auto_update
     if isinstance(from_node, ShaderNodeOutputWorld) and isinstance(
         to_node, ShaderNodeOutputWorld
     ):
-        if to_node.is_active_output != from_node.is_active_output:
-            to_node.is_active_output = from_node.is_active_output
-        if to_node.target != from_node.target:
-            to_node.target = from_node.target
+        to_node.is_active_output = from_node.is_active_output
+        to_node.target = from_node.target
     if isinstance(from_node, ShaderNodeOutputMaterial) and isinstance(
         to_node, ShaderNodeOutputMaterial
     ):
-        if to_node.is_active_output != from_node.is_active_output:
-            to_node.is_active_output = from_node.is_active_output
-        if to_node.target != from_node.target:
-            to_node.target = from_node.target
+        to_node.is_active_output = from_node.is_active_output
+        to_node.target = from_node.target
     if isinstance(from_node, ShaderNodeOutputLineStyle) and isinstance(
         to_node, ShaderNodeOutputLineStyle
     ):
-        if to_node.blend_type != from_node.blend_type:
-            to_node.blend_type = from_node.blend_type
-        if to_node.is_active_output != from_node.is_active_output:
-            to_node.is_active_output = from_node.is_active_output
-        if to_node.target != from_node.target:
-            to_node.target = from_node.target
-        if to_node.use_alpha != from_node.use_alpha:
-            to_node.use_alpha = from_node.use_alpha
-        if to_node.use_clamp != from_node.use_clamp:
-            to_node.use_clamp = from_node.use_clamp
+        to_node.blend_type = from_node.blend_type
+        to_node.is_active_output = from_node.is_active_output
+        to_node.target = from_node.target
+        to_node.use_alpha = from_node.use_alpha
+        to_node.use_clamp = from_node.use_clamp
     if isinstance(from_node, ShaderNodeOutputLight) and isinstance(
         to_node, ShaderNodeOutputLight
     ):
-        if to_node.is_active_output != from_node.is_active_output:
-            to_node.is_active_output = from_node.is_active_output
-        if to_node.target != from_node.target:
-            to_node.target = from_node.target
+        to_node.is_active_output = from_node.is_active_output
+        to_node.target = from_node.target
     if isinstance(from_node, ShaderNodeOutputAOV) and isinstance(
         to_node, ShaderNodeOutputAOV
     ):
-        if to_node.name != from_node.name:
-            to_node.name = from_node.name
+        to_node.name = from_node.name
     if isinstance(from_node, ShaderNodeNormalMap) and isinstance(
         to_node, ShaderNodeNormalMap
     ):
-        if to_node.space != from_node.space:
-            to_node.space = from_node.space
-        if to_node.uv_map != from_node.uv_map:
-            to_node.uv_map = from_node.uv_map
+        to_node.space = from_node.space
+        to_node.uv_map = from_node.uv_map
     if isinstance(from_node, ShaderNodeMixRGB) and isinstance(
         to_node, ShaderNodeMixRGB
     ):
-        if to_node.blend_type != from_node.blend_type:
-            to_node.blend_type = from_node.blend_type
-        if to_node.use_alpha != from_node.use_alpha:
-            to_node.use_alpha = from_node.use_alpha
-        if to_node.use_clamp != from_node.use_clamp:
-            to_node.use_clamp = from_node.use_clamp
+        to_node.blend_type = from_node.blend_type
+        to_node.use_alpha = from_node.use_alpha
+        to_node.use_clamp = from_node.use_clamp
     if isinstance(from_node, ShaderNodeMath) and isinstance(to_node, ShaderNodeMath):
-        if to_node.operation != from_node.operation:
-            to_node.operation = from_node.operation
-        if to_node.use_clamp != from_node.use_clamp:
-            to_node.use_clamp = from_node.use_clamp
+        to_node.operation = from_node.operation
+        to_node.use_clamp = from_node.use_clamp
     if isinstance(from_node, ShaderNodeMapping) and isinstance(
         to_node, ShaderNodeMapping
     ):
-        if to_node.vector_type != from_node.vector_type:
-            to_node.vector_type = from_node.vector_type
+        to_node.vector_type = from_node.vector_type
     if isinstance(from_node, ShaderNodeMapRange) and isinstance(
         to_node, ShaderNodeMapRange
     ):
-        if to_node.clamp != from_node.clamp:
-            to_node.clamp = from_node.clamp
-        if to_node.interpolation_type != from_node.interpolation_type:
-            to_node.interpolation_type = from_node.interpolation_type
+        to_node.clamp = from_node.clamp
+        to_node.interpolation_type = from_node.interpolation_type
     if isinstance(from_node, ShaderNodeGroup) and isinstance(to_node, ShaderNodeGroup):
         copy_shader_node_group(context, from_node, to_node)
     if isinstance(from_node, ShaderNodeDisplacement) and isinstance(
         to_node, ShaderNodeDisplacement
     ):
-        if to_node.space != from_node.space:
-            to_node.space = from_node.space
+        to_node.space = from_node.space
     if isinstance(from_node, ShaderNodeCustomGroup) and isinstance(
         to_node, ShaderNodeCustomGroup
     ):
         # to_node.node_tree = from_node.node_tree
         logger.error("Importing ShaderNodeCustomGroup doesn't be supported yet")
     if isinstance(from_node, ShaderNodeClamp) and isinstance(to_node, ShaderNodeClamp):
-        if to_node.clamp_type != from_node.clamp_type:
-            to_node.clamp_type = from_node.clamp_type
+        to_node.clamp_type = from_node.clamp_type
     if isinstance(from_node, ShaderNodeBump) and isinstance(to_node, ShaderNodeBump):
-        if to_node.invert != from_node.invert:
-            to_node.invert = from_node.invert
+        to_node.invert = from_node.invert
     if isinstance(from_node, ShaderNodeBsdfToon) and isinstance(
         to_node, ShaderNodeBsdfToon
     ):
-        if to_node.component != from_node.component:
-            to_node.component = from_node.component
+        to_node.component = from_node.component
     if isinstance(from_node, ShaderNodeBsdfRefraction) and isinstance(
         to_node, ShaderNodeBsdfRefraction
     ):
-        if to_node.distribution != from_node.distribution:
-            to_node.distribution = from_node.distribution
+        to_node.distribution = from_node.distribution
     if isinstance(from_node, ShaderNodeBsdfPrincipled) and isinstance(
         to_node, ShaderNodeBsdfPrincipled
     ):
-        if to_node.distribution != from_node.distribution:
-            to_node.distribution = from_node.distribution
-        if to_node.subsurface_method != from_node.subsurface_method:
-            to_node.subsurface_method = from_node.subsurface_method
+        to_node.distribution = from_node.distribution
+        to_node.subsurface_method = from_node.subsurface_method
     if isinstance(from_node, ShaderNodeBsdfHairPrincipled) and isinstance(
         to_node, ShaderNodeBsdfHairPrincipled
     ):
-        if to_node.parametrization != from_node.parametrization:
-            to_node.parametrization = from_node.parametrization
+        to_node.parametrization = from_node.parametrization
     if isinstance(from_node, ShaderNodeBsdfHair) and isinstance(
         to_node, ShaderNodeBsdfHair
     ):
-        if to_node.component != from_node.component:
-            to_node.component = from_node.component
+        to_node.component = from_node.component
     if isinstance(from_node, ShaderNodeBsdfGlass) and isinstance(
         to_node, ShaderNodeBsdfGlass
     ):
-        if to_node.distribution != from_node.distribution:
-            to_node.distribution = from_node.distribution
+        to_node.distribution = from_node.distribution
     if isinstance(from_node, ShaderNodeBsdfAnisotropic) and isinstance(
         to_node, ShaderNodeBsdfAnisotropic
     ):
-        if to_node.distribution != from_node.distribution:
-            to_node.distribution = from_node.distribution
+        to_node.distribution = from_node.distribution
     if isinstance(from_node, ShaderNodeBevel) and isinstance(to_node, ShaderNodeBevel):
-        if to_node.samples != from_node.samples:
-            to_node.samples = from_node.samples
+        to_node.samples = from_node.samples
     if isinstance(from_node, ShaderNodeAttribute) and isinstance(
         to_node, ShaderNodeAttribute
     ):
-        if to_node.attribute_name != from_node.attribute_name:
-            to_node.attribute_name = from_node.attribute_name
+        to_node.attribute_name = from_node.attribute_name
     if isinstance(from_node, ShaderNodeAmbientOcclusion) and isinstance(
         to_node, ShaderNodeAmbientOcclusion
     ):
-        if to_node.inside != from_node.inside:
-            to_node.inside = from_node.inside
-        if to_node.only_local != from_node.only_local:
-            to_node.only_local = from_node.only_local
-        if to_node.samples != from_node.samples:
-            to_node.samples = from_node.samples
+        to_node.inside = from_node.inside
+        to_node.only_local = from_node.only_local
+        to_node.samples = from_node.samples
 
     if bpy.app.version >= (3, 3):
         from bpy.types import (
@@ -1177,62 +987,48 @@ def copy_node(
         if isinstance(from_node, ShaderNodeCombineColor) and isinstance(
             to_node, ShaderNodeCombineColor
         ):
-            if to_node.mode != from_node.mode:
-                to_node.mode = from_node.mode
+            to_node.mode = from_node.mode
         if isinstance(from_node, ShaderNodeSeparateColor) and isinstance(
             to_node, ShaderNodeSeparateColor
         ):
-            if to_node.mode != from_node.mode:
-                to_node.mode = from_node.mode
+            to_node.mode = from_node.mode
 
         if isinstance(from_node, GeometryNodeSwitch) and isinstance(
             to_node, GeometryNodeSwitch
         ):
-            if to_node.input_type != from_node.input_type:
-                to_node.input_type = from_node.input_type
+            to_node.input_type = from_node.input_type
         if isinstance(from_node, GeometryNodeExtrudeMesh) and isinstance(
             to_node, GeometryNodeExtrudeMesh
         ):
-            if to_node.mode != from_node.mode:
-                to_node.mode = from_node.mode
+            to_node.mode = from_node.mode
         if isinstance(from_node, GeometryNodeDeleteGeometry) and isinstance(
             to_node, GeometryNodeDeleteGeometry
         ):
-            if to_node.domain != from_node.domain:
-                to_node.domain = from_node.domain
-            if to_node.mode != from_node.mode:
-                to_node.mode = from_node.mode
+            to_node.domain = from_node.domain
+            to_node.mode = from_node.mode
         if isinstance(from_node, GeometryNodeSeparateGeometry) and isinstance(
             to_node, GeometryNodeSeparateGeometry
         ):
-            if to_node.domain != from_node.domain:
-                to_node.domain = from_node.domain
+            to_node.domain = from_node.domain
 
     if bpy.app.version >= (3, 4):
         from bpy.types import ShaderNodeMix
 
         if isinstance(from_node, ShaderNodeMix) and isinstance(to_node, ShaderNodeMix):
-            if to_node.blend_type != from_node.blend_type:
-                to_node.blend_type = from_node.blend_type
-            if to_node.clamp_factor != from_node.clamp_factor:
-                to_node.clamp_factor = from_node.clamp_factor
-            if to_node.clamp_result != from_node.clamp_result:
-                to_node.clamp_result = from_node.clamp_result
-            if to_node.data_type != from_node.data_type:
-                to_node.data_type = from_node.data_type
-            if to_node.factor_mode != from_node.factor_mode:
-                to_node.factor_mode = from_node.factor_mode
+            to_node.blend_type = from_node.blend_type
+            to_node.clamp_factor = from_node.clamp_factor
+            to_node.clamp_result = from_node.clamp_result
+            to_node.data_type = from_node.data_type
+            to_node.factor_mode = from_node.factor_mode
 
     if bpy.app.version < (4, 0):
         from bpy.types import ShaderNodeBsdfGlossy
 
-        if to_node.width_hidden != from_node.width_hidden:
-            to_node.width_hidden = from_node.width_hidden
+        to_node.width_hidden = from_node.width_hidden
         if isinstance(from_node, ShaderNodeBsdfGlossy) and isinstance(
             to_node, ShaderNodeBsdfGlossy
         ):
-            if to_node.distribution != from_node.distribution:
-                to_node.distribution = from_node.distribution
+            to_node.distribution = from_node.distribution
 
     if bpy.app.version < (4, 1):
         from bpy.types import ShaderNodeTexMusgrave
@@ -1240,35 +1036,8 @@ def copy_node(
         if isinstance(from_node, ShaderNodeTexMusgrave) and isinstance(
             to_node, ShaderNodeTexMusgrave
         ):
-            if to_node.musgrave_dimensions != from_node.musgrave_dimensions:
-                to_node.musgrave_dimensions = from_node.musgrave_dimensions
-            if to_node.musgrave_type != from_node.musgrave_type:
-                to_node.musgrave_type = from_node.musgrave_type
-
-    if bpy.app.version < (5, 0):
-        from bpy.types import ShaderNodeTexPointDensity
-
-        if isinstance(from_node, ShaderNodeTexPointDensity) and isinstance(
-            to_node, ShaderNodeTexPointDensity
-        ):
-            if to_node.interpolation != from_node.interpolation:
-                to_node.interpolation = from_node.interpolation
-            if to_node.object != from_node.object:
-                to_node.object = from_node.object
-            if to_node.particle_color_source != from_node.particle_color_source:
-                to_node.particle_color_source = from_node.particle_color_source
-            if to_node.point_source != from_node.point_source:
-                to_node.point_source = from_node.point_source
-            if to_node.radius != from_node.radius:
-                to_node.radius = from_node.radius
-            if to_node.resolution != from_node.resolution:
-                to_node.resolution = from_node.resolution
-            if to_node.space != from_node.space:
-                to_node.space = from_node.space
-            if to_node.vertex_attribute_name != from_node.vertex_attribute_name:
-                to_node.vertex_attribute_name = from_node.vertex_attribute_name
-            if to_node.vertex_color_source != from_node.vertex_color_source:
-                to_node.vertex_color_source = from_node.vertex_color_source
+            to_node.musgrave_dimensions = from_node.musgrave_dimensions
+            to_node.musgrave_type = from_node.musgrave_type
 
 
 def clear_node_tree(
@@ -1406,9 +1175,7 @@ def copy_node_tree_interface_socket(
     to_socket.attribute_domain = from_socket.attribute_domain
     to_socket.default_attribute_name = from_socket.default_attribute_name
     to_socket.hide_value = from_socket.hide_value
-    to_socket.hide_in_modifier = (
-        True  # For internal use only, always hide from modifier
-    )
+    to_socket.hide_in_modifier = from_socket.hide_in_modifier
     to_socket.force_non_field = from_socket.force_non_field
 
     if isinstance(from_socket, float_classes) and isinstance(to_socket, float_classes):
@@ -1677,12 +1444,12 @@ def copy_node_tree(
     for from_node, to_node in from_to.items():
         # The location of the node can be completely restored by setting the location
         # again with a consistent parent-child relationship.
-        from_node_location = (
-            from_node.location[0],
-            from_node.location[1],
+        to_node.location = deepcopy(
+            (
+                from_node.location[0],
+                from_node.location[1],
+            )
         )
-        if tuple(to_node.location) != from_node_location:
-            to_node.location = from_node_location
 
 
 def get_image_name_and_sampler_type(
@@ -1729,6 +1496,16 @@ def get_image_name_and_sampler_type(
     return image_name, wrap_type, filter_type
 
 
+def float_or_none(
+    v: object, min_value: float = -float_info.max, max_value: float = float_info.max
+) -> Optional[float]:
+    if isinstance(v, float) and math.isnan(v):
+        return None
+    if isinstance(v, (float, int)):
+        return max(min_value, min(float(v), max_value))
+    return None
+
+
 def get_float_value(
     shader_node: Node,
     input_socket_name: str,
@@ -1739,7 +1516,7 @@ def get_float_value(
     if not socket:
         return None
 
-    default_value = convert.float_or_none(
+    default_value = float_or_none(
         getattr(socket, "default_value", None), min_value, max_value
     )
 
@@ -1755,7 +1532,7 @@ def get_float_value(
     if not outputs:
         return default_value
 
-    return convert.float_or_none(
+    return float_or_none(
         getattr(outputs[0], "default_value", None), min_value, max_value
     )
 
@@ -1791,7 +1568,7 @@ def rgba_or_none(
 
     rgba: list[float] = []
     for v in iterator:
-        f = convert.float_or_none(v, min_value, max_value)
+        f = float_or_none(v, min_value, max_value)
         if f is None:
             return None
         rgba.append(f)
@@ -1866,7 +1643,7 @@ def rgb_or_none(
 
     rgb: list[float] = []
     for v in iterator:
-        f = convert.float_or_none(v, min_value, max_value)
+        f = float_or_none(v, min_value, max_value)
         if f is None:
             return None
         rgb.append(f)
@@ -1924,9 +1701,6 @@ def get_rgb_value_or(
 
 
 def setup_frame_count_driver(context: Context) -> None:
-    if bpy.app.version < (3, 6):
-        return
-
     node_group = context.blend_data.node_groups.get(UV_ANIMATION_GROUP_NAME)
     if not node_group:
         return
@@ -2006,10 +1780,18 @@ def setup_frame_count_driver(context: Context) -> None:
             )
             continue
         target = variable.targets[0]
-        if variable.type != "CONTEXT_PROP":
-            variable.type = "CONTEXT_PROP"
-        if target.context_property != "ACTIVE_SCENE":
-            target.context_property = "ACTIVE_SCENE"
+        if bpy.app.version >= (3, 6):
+            if variable.type != "CONTEXT_PROP":
+                variable.type = "CONTEXT_PROP"
+            if target.context_property != "ACTIVE_SCENE":
+                target.context_property = "ACTIVE_SCENE"
+        else:
+            if variable.type != "SINGLE_PROP":
+                variable.type = "SINGLE_PROP"
+            if target.id_type != "SCENE":
+                target.id_type = "SCENE"
+            if target.id != context.scene:
+                target.id = context.scene
         if target.data_path != target_data_path:
             target.data_path = target_data_path
 

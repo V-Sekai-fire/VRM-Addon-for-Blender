@@ -89,16 +89,16 @@ translation_dictionary: dict[tuple[str, str], str] = {
     ("*", "Export Lights"): "输出灯光",
     (
         "*",
-        "No errors found. Ready to export VRM",
+        "No error. Ready for export VRM",
     ): "未发现任何错误。。可导出 VRM",
     (
         "*",
-        "No errors found. But there are {warning_count} warning(s)."
+        "No error. But there're {warning_count} warning(s)."
         + " The output may not be what you expected.",
     ): "没有错误。、{warning_count}有关于此的警告。。" + "输出结果可能与预期不同。",
     ("*", "VRM Export"): "VRM 输出",
     ("*", "Create VRM Model"): "创建 VRM 模型",
-    ("*", "Check VRM Model"): "按VRM 模型标准检查",
+    ("*", "Check as VRM Model"): "按VRM 模型标准检查",
     ("*", "Extract texture images into the folder"): "将纹理图像解压到文件夹中。",
     (
         "*",
@@ -122,6 +122,10 @@ translation_dictionary: dict[tuple[str, str], str] = {
     ("*", "License Confirmation"): "许可确认。",
     (
         "*",
+        'Is this VRM allowed to edited? Please check its "{json_key}" value.',
+    ): "指定 VRM 的元数据「{json_key}」值" + "已设置了唯一的许可证 URL。。",
+    (
+        "*",
         'This VRM is licensed by VRoid Hub License "Alterations: No".',
     ): "指定的 VRM 具有 VRoid Hub 的许可「改変: 禁止」。。",
     (
@@ -134,9 +138,18 @@ translation_dictionary: dict[tuple[str, str], str] = {
     ): "指定的 VRM 具有「Other」许可证规定、" + "未设置 URL。",
     (
         "*",
-        "glTF nodes (mesh, bone) cannot have duplicate names."
+        'The VRM is licensed by "{license_name}".'
+        + " No derivative works are allowed.",
+    ): "指定 VRM 的不可修改许可证。「{license_name}」设置为。" + "不允许衍生作品。。",
+    (
+        "*",
+        "Nodes(mesh,bones) require unique names for VRM export."
         + " {name} is duplicated.",
     ): "glTF 节点元素(网格,骨骼)名称不得重复。。" + "「{name}」是重复的。。",
+    (
+        "*",
+        'There are not an object on the origin "{name}"',
+    ): "原点坐标上无对象「{name}」",
     (
         "*",
         "The same name cannot be used"
@@ -147,7 +160,7 @@ translation_dictionary: dict[tuple[str, str], str] = {
         "*",
         'The "{name}" mesh has both a non-armature modifier'
         + " and a shape key. However, they cannot coexist"
-        + ", so shape keys may not be exported correctly.",
+        + ", so shape keys may not be export correctly.",
     ): "网格「{name}」に"
     + "non-armature修改器和形态键都已设置，但、"
     + "它们不能共存，形态键可能无法正确输出。",
@@ -168,7 +181,7 @@ translation_dictionary: dict[tuple[str, str], str] = {
     ): "只能为 VRM 输出选择一个armatures。 可多次选择。",
     (
         "*",
-        'Required VRM Human Bone "{humanoid_name}" is'
+        'Required VRM Bone "{humanoid_name}" is'
         + " not assigned. Please confirm hierarchy"
         + " of {humanoid_name} and its children."
         + ' "VRM" Panel → "VRM 0.x Humanoid" → {humanoid_name}'
@@ -180,7 +193,7 @@ translation_dictionary: dict[tuple[str, str], str] = {
     (
         "*",
         'Couldn\'t assign "{bone}" bone'
-        + ' to VRM Human Bone "{human_bone}". '
+        + ' to VRM Humanoid Bone: "{human_bone}". '
         + 'Confirm hierarchy of "{bone}" and its children. '
         + '"VRM" Panel → "Humanoid" → "{human_bone}" is empty'
         + " if wrong hierarchy",
@@ -189,7 +202,7 @@ translation_dictionary: dict[tuple[str, str], str] = {
     + "「{human_bone}」检查骨骼设置。",
     (
         "*",
-        'Required VRM Human Bone "{humanoid_name}" is'
+        'Required VRM Bone "{humanoid_name}" is'
         + " not assigned. Please confirm hierarchy"
         + " of {humanoid_name} and its children. "
         + '"VRM" Panel → "Humanoid" → {humanoid_name}'
@@ -200,7 +213,7 @@ translation_dictionary: dict[tuple[str, str], str] = {
     + "「{humanoid_name}」如果层次结构有误。",
     (
         "*",
-        'Please assign Required VRM Human Bone "{name}".',
+        'Please assign Required VRM Bone "{name}".',
     ): "请分配所需的 VRM 骨 「{name}」。",
     (
         "*",
@@ -209,15 +222,14 @@ translation_dictionary: dict[tuple[str, str], str] = {
     ): "「{parent_name}」指定。" + "因为「{name}」需要将其作为子骨骼。。",
     (
         "*",
-        'Non-triangular faces detected in "{name}". '
-        + "They will be triangulated automatically.",
+        'Non-tri faces detected in "{name}". ' + "will be triangulated automatically.",
     ): "「{name}」包含三角形以外的多边形。" + "自动划分为三角形。",
     (
         "*",
-        'VRM Human Bone "{child}" needs "{parent}".'
+        'VRM Bone "{child}" needs "{parent}".'
         + " Please confirm"
         + ' "VRM" Panel → "Humanoid"'
-        + ' → "Optional VRM Human Bones" → "{parent}".',
+        + ' → "VRM Optional Bones" → "{parent}".',
     ): "VRM骨骼「{child}」需要「{parent}」。"
     + "「VRM」面板「Humanoid」→「VRM可选的骨骼」で"
     + "「{parent}」骨骼設定。",
@@ -259,14 +271,14 @@ translation_dictionary: dict[tuple[str, str], str] = {
     + "直接向 “表面 ”指定其中之一。 输出空材质。。",
     (
         "*",
-        '"{image_name}" was not found at file path "{image_filepath}". '
-        + "Please load the file in Blender.",
+        '"{image_name}" is not found in file path "{image_filepath}". '
+        + "Please load file of it in Blender.",
     ): '「{image_name}」指定文件路径中的图像文件。「"{image_filepath}"」'
     + "图像不存在于 请重新加载图像。。",
     (
         "*",
-        "firstPersonBone was not found. "
-        + 'VRM HumanBone "head" will be used automatically instead.',
+        "firstPersonBone is not found. "
+        + 'Set VRM HumanBone "head" instead automatically.',
     ): "firstPersonBone未设置。。"
     + "自动设置将 VRM humanborn「head」改为 firstPersonBone。。",
     (
@@ -292,7 +304,7 @@ translation_dictionary: dict[tuple[str, str], str] = {
     + "「{expect_node_type}」直接连接。 ",
     (
         "*",
-        'Image in material "{material_name}" is not set.' + " Please add an image.",
+        'image in material "{material_name}" is not put.' + " Please set image.",
     ): "材质「{material_name}」"
     + "有一个没有设置纹理的图像节点。"
     + "删除或设置图像。",
@@ -306,11 +318,11 @@ translation_dictionary: dict[tuple[str, str], str] = {
     ("*", "Load Bone Mappings"): "加载骨骼对应关系",
     (
         "*",
-        "All Required VRM Human Bones have been assigned.",
+        "All VRM Required Bones have been assigned.",
     ): "所有 VRM 必需骨骼分配都已完成。",
     (
         "*",
-        "There are unassigned Required VRM Human Bones. Please assign all.",
+        "There are unassigned VRM Required Bones. Please assign all.",
     ): "存在未分配的 VRM 必需骨骼。" + "分配所有 VRM 必需骨骼。",
     ("Operator", "Automatic Bone Assignment"): "自动骨骼分配",
     ("Operator", "Export VRM"): "导出 VRM",
@@ -318,18 +330,18 @@ translation_dictionary: dict[tuple[str, str], str] = {
     ("Operator", "Preview MToon 0.0"): "MToon 0.0预览",
     ("Operator", "VRM Humanoid"): "VRM人形",
     ("Operator", "VRM License Confirmation"): "查看 VRM 使用条款",
-    ("Operator", "Required VRM Human Bones Assignment"): "配置 VRM 必需骨骼",
+    ("Operator", "VRM Required Bones Assignment"): "配置 VRM 必需骨骼",
     (
         "*",
         "Conditions exported as Roll Constraint\n"
-        + " - {copy_rotation}\n"
+        + " - Copy Rotation\n"
         + " - Enabled\n"
         + " - No Vertex Group\n"
-        + " - {axis} is one of X, Y and Z\n"
+        + " - Axis is one of X, Y and Z\n"
         + " - No Inverted\n"
-        + " - {mix} is {add}\n"
-        + " - {target} is {local_space}\n"
-        + " - {owner} is {local_space}\n"
+        + " - Mix is Add\n"
+        + " - Target is Local Space\n"
+        + " - Owner is Local Space\n"
         + " - No circular dependencies\n"
         + " - The one at the top of the list of\n"
         + "   those that meet all the conditions\n",
@@ -347,9 +359,9 @@ translation_dictionary: dict[tuple[str, str], str] = {
     (
         "*",
         "Conditions exported as Aim Constraint\n"
-        + " - {damped_track}\n"
+        + " - Damped Track\n"
         + " - Enabled\n"
-        + " - Target Bone {head_tail} is 0\n"
+        + " - Target Bone Head/Tail is 0\n"
         + " - No Follow Target Bone B-Bone\n"
         + " - No circular dependencies\n"
         + " - The one at the top of the list of\n"
@@ -364,14 +376,14 @@ translation_dictionary: dict[tuple[str, str], str] = {
     (
         "*",
         "Conditions exported as Rotation Constraint\n"
-        + " - {copy_rotation}\n"
+        + " - Copy Rotation\n"
         + " - Enabled\n"
         + " - No Vertex Group\n"
-        + " - {axis} is X, Y and Z\n"
+        + " - Axis is X, Y and Z\n"
         + " - No Inverted\n"
-        + " - {mix} is {add}\n"
-        + " - {target} is {local_space}\n"
-        + " - {owner} is {local_space}\n"
+        + " - Mix is Add\n"
+        + " - Target is Local Space\n"
+        + " - Owner is Local Space\n"
         + " - No circular dependencies\n"
         + " - The one at the top of the list of\n"
         + "   those that meet all the conditions\n",
@@ -491,8 +503,8 @@ translation_dictionary: dict[tuple[str, str], str] = {
     ("*", "Armature to be animated"): "动画的骨骼",
     (
         "*",
-        "https://vrm-addon-for-blender.info/en-us/animation/",
-    ): "https://vrm-addon-for-blender.info/ja-jp/animation/",
+        "https://vrm-addon-for-blender.info/en/animation/",
+    ): "https://vrm-addon-for-blender.info/ja/animation/",
     ("Operator", "Open help in a Web Browser"): "在 Web 浏览器中打开“帮助”",
     ("*", "Allow Non-Humanoid Rig"): "允许使用非人形骨骼",
     (
@@ -503,8 +515,8 @@ translation_dictionary: dict[tuple[str, str], str] = {
     ): ("作为 非人形 导出VRM\n" + "无法应用动画\n" + "于人形avatar。"),
     (
         "*",
-        "This armature will be exported but not as a humanoid."
-        + " It cannot have animations applied"
+        "This armature will be exported but not as humanoid."
+        + " It can not have animations applied"
         + " for humanoid avatars.",
     ): "这个骨架会导出但是不是作为人形。" + "人形avatars的动画不适用。",
     (
@@ -668,7 +680,7 @@ translation_dictionary: dict[tuple[str, str], str] = {
     # Humanoid
     (
         "*",
-        "Required VRM Human Bones",
+        "VRM Required Bones",
     ): "VRM必须的骨骼",
     (
         "*",
@@ -716,7 +728,7 @@ translation_dictionary: dict[tuple[str, str], str] = {
     ): "脚 Foot:",
     (
         "*",
-        "Optional VRM Human Bones",
+        "VRM Optional Bones",
     ): "VRM可选的骨骼",
     (
         "*",

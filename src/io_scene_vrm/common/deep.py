@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: MIT OR GPL-3.0-or-later
 import difflib
 import math
-from collections.abc import Mapping
 from json import dumps as json_dumps
 
 from . import convert
@@ -17,9 +16,6 @@ def make_json(v: object) -> Json:
     if isinstance(v, int):
         return v
     if isinstance(v, float):
-        if not math.isfinite(v):
-            logger.warning("%s %s is non-finite value", v, type(v))
-            return 0.0
         return v
     if isinstance(v, bool):
         return v
@@ -42,10 +38,6 @@ def make_json(v: object) -> Json:
 
     logger.warning("%s %s is unrecognized type", v, type(v))
     return None
-
-
-def make_json_dict(v: Mapping[str, object]) -> dict[str, Json]:
-    return {key: make_json(value) for key, value in v.items()}
 
 
 def diff(
@@ -119,14 +111,6 @@ def diff(
         return []
 
     if isinstance(left, (int, float)) and isinstance(right, (int, float)):
-        if (isinstance(left, float) and not math.isfinite(left)) or (
-            isinstance(right, float) and not math.isfinite(right)
-        ):
-            return [
-                f"{path}: left is {left}"
-                + f" but right is {right}, They are not comparable numbers"
-            ]
-
         error = math.fabs(float(left) - float(right))
         if error > float_tolerance:
             return [

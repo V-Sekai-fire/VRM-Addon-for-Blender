@@ -1,36 +1,17 @@
-#!/bin/bash
+#!/bin/sh
 # SPDX-License-Identifier: MIT OR GPL-3.0-or-later
 
-set -eux -o pipefail
-
-validate_file_name_characters() (
-  set +x
-
-  git ls-files | while read -r f; do
-    encoding=$(echo "$f" | uchardet)
-    if [ "$encoding" != "ASCII" ]; then
-      echo "$f is not ascii file name but $encoding."
-      exit 1
-    fi
-  done
-
-  git ls-files "*.py" "*.pyi" | while read -r f; do
-    if [ "$f" != "$(echo "$f" | LC_ALL=C tr "[:upper:]" "[:lower:]")" ]; then
-      echo "$f contains uppercase character"
-      exit 1
-    fi
-  done
-)
+set -eux
 
 cd "$(dirname "$0")/.."
 
-uv run python -c "import io_scene_vrm; io_scene_vrm.register(); io_scene_vrm.unregister()"
-validate_file_name_characters
 git ls-files "*.sh" | xargs shellcheck
 git ls-files "*.py" "*.pyi" | xargs uv run ruff check
 git ls-files "*.py" "*.pyi" | xargs uv run codespell
-git ls-files "*.sh" | xargs shfmt -d
+git ls-files "*.py" "*.pyi" | xargs uv run mypy --show-error-codes
+git ls-files "*.sh" | xargs shfmt -d -s
 git ls-files "*/Dockerfile" "*.dockerfile" | xargs hadolint
-deno lint
-deno task pyright
-deno task vrm-validator
+npm install
+uv run ./node_modules/.bin/pyright --warnings
+npm exec --yes -- prettier --check .
+npm exec --yes --package=gltf-validator -- node ./tools/vrm_validator.js

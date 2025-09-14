@@ -66,7 +66,7 @@ def export_materials(context: Context, objects: Sequence[Object]) -> Sequence[Ma
                 continue
             result.append(material)
 
-    return list(dict.fromkeys(result))  # Remove duplicates
+    return list(dict.fromkeys(result))  # 重複削除
 
 
 LEGACY_SHADER_NAMES: Final = (
@@ -202,7 +202,7 @@ def object_distance(
 
 
 def armature_exists(context: Context) -> bool:
-    return any(armature.users > 0 for armature in context.blend_data.armatures) and any(
+    return any(armature.users for armature in context.blend_data.armatures) and any(
         obj.type == "ARMATURE" for obj in context.blend_data.objects
     )
 
@@ -216,7 +216,8 @@ def current_armature_is_vrm0(context: Context) -> bool:
     if not live_armature_datum:
         return False
     if all(
-        get_armature_extension(armature_data).is_vrm0()
+        hasattr(armature_data, "vrm_addon_extension")
+        and get_armature_extension(armature_data).is_vrm0()
         for armature_data in live_armature_datum
     ) and any(obj.type == "ARMATURE" for obj in context.blend_data.objects):
         return True
@@ -238,7 +239,8 @@ def current_armature_is_vrm1(context: Context) -> bool:
     if not live_armature_datum:
         return False
     if all(
-        get_armature_extension(armature_data).is_vrm1()
+        hasattr(armature_data, "vrm_addon_extension")
+        and get_armature_extension(armature_data).is_vrm1()
         for armature_data in live_armature_datum
     ) and any(obj.type == "ARMATURE" for obj in context.blend_data.objects):
         return True
@@ -345,11 +347,10 @@ def export_objects(
     for armature_data in context.blend_data.armatures:
         ext = get_armature_extension(armature_data)
         for spring_bone1_collider in ext.spring_bone1.colliders:
-            spring_bone1_collider_bpy_object = spring_bone1_collider.bpy_object
-            if not spring_bone1_collider_bpy_object:
+            if not spring_bone1_collider.bpy_object:
                 continue
-            collider_bpy_objects.append(spring_bone1_collider_bpy_object)
-            collider_bpy_objects.extend(spring_bone1_collider_bpy_object.children)
+            collider_bpy_objects.append(spring_bone1_collider.bpy_object)
+            collider_bpy_objects.extend(spring_bone1_collider.bpy_object.children)
         for collider_group in ext.vrm0.secondary_animation.collider_groups:
             collider_bpy_objects.extend(
                 collider.bpy_object for collider in collider_group.colliders
@@ -367,7 +368,7 @@ def export_objects(
         objects.append(obj)
 
     return [
-        # Remove colliders and duplicates
+        # コライダーと重複の削除
         obj
         for obj in dict.fromkeys(objects)
         if obj not in collider_bpy_objects
@@ -398,8 +399,8 @@ def roll_constraint_or_none(
         not isinstance(constraint, CopyRotationConstraint)
         or not constraint.is_valid
         or constraint.mute
-        or not (constraint_target := constraint.target)
-        or constraint_target not in objs
+        or not constraint.target
+        or constraint.target not in objs
         or constraint.mix_mode != "ADD"
         or (int(constraint.use_x) + int(constraint.use_y) + int(constraint.use_z)) != 1
         or constraint.owner_space != "LOCAL"
@@ -407,10 +408,10 @@ def roll_constraint_or_none(
     ):
         return None
 
-    if constraint_target.type != "ARMATURE":
+    if constraint.target.type != "ARMATURE":
         return constraint
 
-    if constraint_target != armature:
+    if constraint.target != armature:
         return None
 
     armature_data = armature.data
@@ -432,15 +433,15 @@ def aim_constraint_or_none(
         not isinstance(constraint, DampedTrackConstraint)
         or not constraint.is_valid
         or constraint.mute
-        or not (constraint_target := constraint.target)
-        or constraint_target not in objs
+        or not constraint.target
+        or constraint.target not in objs
     ):
         return None
 
-    if constraint_target.type != "ARMATURE":
+    if constraint.target.type != "ARMATURE":
         return constraint
 
-    if constraint_target != armature:
+    if constraint.target != armature:
         return None
 
     armature_data = armature.data
@@ -463,7 +464,7 @@ def rotation_constraint_or_none(
         not isinstance(constraint, CopyRotationConstraint)
         or not constraint.is_valid
         or constraint.mute
-        or not (constraint_target := constraint.target)
+        or not constraint.target
         or constraint.target not in objs
         or constraint.invert_x
         or constraint.invert_y
@@ -477,10 +478,10 @@ def rotation_constraint_or_none(
     ):
         return None
 
-    if constraint_target.type != "ARMATURE":
+    if constraint.target.type != "ARMATURE":
         return constraint
 
-    if constraint_target != armature:
+    if constraint.target != armature:
         return None
 
     armature_data = armature.data

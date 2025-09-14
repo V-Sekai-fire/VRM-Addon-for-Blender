@@ -75,8 +75,7 @@ def migrate(context: Context, *, show_progress: bool = False) -> None:
 
         if not state.material_blender_4_2_warning_shown:
             state.material_blender_4_2_warning_shown = True
-            # In Blender 4.2.0, if you don't run it with a timer, the dialog will
-            # disappear automatically.
+            # Blender 4.2.0ではtimerで実行しないとダイアログが自動で消える
             bpy.app.timers.register(
                 functools.partial(
                     show_material_blender_4_2_warning_delay,
@@ -93,8 +92,8 @@ def migrate_material(
 ) -> None:
     _, legacy_legacy_shader_name = search.legacy_shader_node(material)
     if legacy_legacy_shader_name in search.LEGACY_SHADER_NAMES:
-        # Since old shader node groups are not compatible with Blender 4.2 as they are,
-        # always warn when upgrading to Blender 4.2 or later.
+        # 古いシェーダーノードグループはそのままではBlender 4.2に未対応なので、
+        # Blender 4.2以降へのバージョンアップ時は必ず警告する
         blender_4_2_migrated_material_names.append(material.name)
         return
 
@@ -321,14 +320,14 @@ def migrate_material(
 
     if (
         addon_version < shader.LAST_MODIFIED_VERSION
-        # Blender 4.2 has a node specification change, so it will be forcibly reset.
+        # Blender 4.2からノードの仕様変更があるので強制的にリセットする
         or (bpy.app.version >= (4, 2) and tuple(context.blend_data.version) < (4, 2))
     ):
         reset_shader_node_group(
             context, material, reset_material_node_tree=True, reset_node_groups=False
         )
 
-    # From this point on, you can write code that assumes the shader node is up to date.
+    # ここから先は、シェーダーノードが最新の状態になっている想定のコードを書ける
     typed_mtoon1 = get_material_extension(material).mtoon1
     typed_vrmc_materials_mtoon = typed_mtoon1.extensions.vrmc_materials_mtoon
     if alpha_mode is not None:

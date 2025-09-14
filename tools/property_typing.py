@@ -20,8 +20,8 @@ logger.setLevel(logging.INFO)
 
 
 def write_property_typing(
-    property_name: str,
-    property_type: str,
+    n: str,
+    t: str,
     keywords: dict[str, object],
 ) -> tuple[str, Optional[str], Optional[str]]:
     arg_line = None
@@ -29,50 +29,41 @@ def write_property_typing(
     arg_type = None
     arg_default: object = None
 
-    logger.info("  ==> prop=%s", property_name)
+    logger.info("  ==> prop=%s", n)
     ruff_line_len = 88
     comment = "  # type: ignore[no-redef]"
-    if property_name == "stiffiness" or property_name.endswith("_ussage_name"):
+    if n == "stiffiness" or n.endswith("_ussage_name"):
         comment += "  # noqa: SC200"
 
-    if property_type in ["bpy.props.StringProperty", "bpy.props.EnumProperty"]:
-        line = f"        {property_name}: str{comment}"
+    if t in ["bpy.props.StringProperty", "bpy.props.EnumProperty"]:
+        line = f"        {n}: str{comment}"
         arg_type = "str"
         arg_default = '""'
-    elif property_type == "bpy.props.FloatProperty":
-        line = f"        {property_name}: float{comment}"
+    elif t == "bpy.props.FloatProperty":
+        line = f"        {n}: float{comment}"
         arg_type = "float"
         arg_default = 0.0
-    elif property_type == "bpy.props.FloatVectorProperty":
-        line = f"        {property_name}: Sequence[float]{comment}"
+    elif t == "bpy.props.FloatVectorProperty":
+        line = f"        {n}: Sequence[float]{comment}"
         if len(line) > ruff_line_len:
-            line = (
-                f"        {property_name}: ({comment}\n"
-                "            Sequence[float]\n        )"
-            )
-    elif property_type == "bpy.props.IntProperty":
-        line = f"        {property_name}: int{comment}"
+            line = f"        {n}: ({comment}\n            Sequence[float]\n        )"
+    elif t == "bpy.props.IntProperty":
+        line = f"        {n}: int{comment}"
         arg_type = "int"
         arg_default = 0
-    elif property_type == "bpy.props.IntVectorProperty":
-        line = f"        {property_name}: Sequence[int]{comment}"
+    elif t == "bpy.props.IntVectorProperty":
+        line = f"        {n}: Sequence[int]{comment}"
         if len(line) > ruff_line_len:
-            line = (
-                f"        {property_name}: ({comment}\n"
-                "            Sequence[int]\n        )"
-            )
-    elif property_type == "bpy.props.BoolProperty":
-        line = f"        {property_name}: bool{comment}"
+            line = f"        {n}: ({comment}\n            Sequence[int]\n        )"
+    elif t == "bpy.props.BoolProperty":
+        line = f"        {n}: bool{comment}"
         arg_type = "bool"
         arg_default = "False"
-    elif property_type == "bpy.props.BoolVectorProperty":
-        line = f"        {property_name}: Sequence[bool]{comment}"
+    elif t == "bpy.props.BoolVectorProperty":
+        line = f"        {n}: Sequence[bool]{comment}"
         if len(line) > ruff_line_len:
-            line = (
-                f"        {property_name}: ({comment}\n"
-                "            Sequence[bool]\n        )"
-            )
-    elif property_type == "bpy.props.PointerProperty":
+            line = f"        {n}: ({comment}\n            Sequence[bool]\n        )"
+    elif t == "bpy.props.PointerProperty":
         target_type = keywords.get("type")
         if not isinstance(target_type, type):
             message = f"Unexpected {keywords}"
@@ -81,14 +72,14 @@ def write_property_typing(
             target_name = f"Optional[{target_type.__name__}]"
         else:
             target_name = target_type.__name__
-        line = f"        {property_name}: {target_name}{comment}"
+        line = f"        {n}: {target_name}{comment}"
         if len(line) > ruff_line_len:
             line = (
-                f"        {property_name}: ({comment}\n"
+                f"        {n}: ({comment}\n"
                 + f"            {target_name}\n"
                 + "        )"
             )
-    elif property_type == "bpy.props.CollectionProperty":
+    elif t == "bpy.props.CollectionProperty":
         target_type = keywords.get("type")
         if not isinstance(target_type, type):
             message = f"Unexpected {keywords}"
@@ -98,38 +89,36 @@ def write_property_typing(
         else:
             target_name = target_type.__name__
         line = (
-            f"        {property_name}: CollectionPropertyProtocol[{comment}\n"
+            f"        {n}: CollectionPropertyProtocol[{comment}\n"
             + f"            {target_name}\n"
             + "        ]"
         )
         arg_type = "Optional[Sequence[Mapping[str, Union[str, int, float, bool]]]]"
         arg_default = None
-        arg_call_line = (
-            f"{property_name}={property_name} if {property_name} is not None else []"
-        )
-    elif property_type.startswith("bpy.props."):
-        line = f"        # TODO: {property_name} {property_type}"
+        arg_call_line = f"{n}={n} if {n} is not None else " + "[]"
+    elif t.startswith("bpy.props."):
+        line = f"        # TODO: {n} {t}"
     else:
         return ("", None, None)
 
     line += "\n"
 
-    if arg_type is not None and property_name != "armature_name":
+    if arg_type is not None:
         arg_default_param = keywords.get("default")
         if arg_default_param is not None:
             arg_default = arg_default_param
             if isinstance(arg_default, str):
-                if len(property_name) + len(arg_type) + len(arg_default) + 12 < 89:
+                if len(n) + len(arg_type) + len(arg_default) + 12 < 89:
                     arg_default = f'"{arg_default}"'
                 else:
                     arg_default = f'"{arg_default[:63]}" "{arg_default[63:]}"'
-        arg_line = f"    {property_name}: {arg_type} = {arg_default},"
+        arg_line = f"    {n}: {arg_type} = {arg_default},"
 
     return (line, arg_line, arg_call_line)
 
 
 def update_property_typing(
-    current_class: type,
+    c: type,
     typing_code: str,
     *,
     more: bool,
@@ -140,12 +129,12 @@ def update_property_typing(
 
     logger.info(
         "------------------------------------------\n%s\n%s",
-        current_class,
+        c,
         typing_code,
     )
 
-    # Find the corresponding file
-    modules = current_class.__module__.split(".")
+    # 該当するファイルを探す
+    modules = c.__module__.split(".")
     modules.reverse()
     module = modules.pop()
     if module != "io_scene_vrm":
@@ -160,9 +149,9 @@ def update_property_typing(
 
     logger.info("%s", path)
 
-    # Find the definition location of the corresponding class
+    # 該当するクラスの定義の場所を探す
     lines = path.read_text(encoding="UTF-8").splitlines()
-    # Skip to the definition of the corresponding class
+    # 該当するクラスの定義まで飛ばす
 
     class_def_index = None
     class_def_colon_index = None
@@ -170,8 +159,8 @@ def update_property_typing(
     another_def_start_index = None
     for line_index, line in enumerate(lines):
         if class_def_index is None:
-            # Find class definition
-            pattern = "^class " + current_class.__name__ + "[^a-zA-Z0-9_]"
+            # クラス定義を探す
+            pattern = "^class " + c.__name__ + "[^a-zA-Z0-9_]"
             if re.match(pattern, line):
                 logger.info("class def found %s", class_def_index)
                 class_def_index = line_index
@@ -179,18 +168,18 @@ def update_property_typing(
                 continue
 
         if class_def_colon_index is None:
-            # Find colon
+            # : を探す
             if re.match(".*:", line.split("#")[0]):
                 logger.info("class colon def found %s", class_def_colon_index)
                 class_def_colon_index = line_index
                 continue
             continue
 
-        # Find `if TYPE_CHECKING:`
+        # if TYPE_CHECKING: を探す
         if re.match("^    if TYPE_CHECKING:", line):
             class_type_checking_index = line_index
         elif class_type_checking_index is not None and re.match("^    [a-zA-Z#]", line):
-            # Reset `if TYPE_CHECKING:` if something else is found after it
+            # if TYPE_CHECKING:が発見されたが、その後何かがあったら無かったことにする
             class_type_checking_index = None
 
         if re.match(r"^\S", line):
@@ -247,23 +236,23 @@ def main() -> int:
     classes = list(registration.classes)
     searching_classes = list(registration.classes)
     while searching_classes:
-        current_class = searching_classes.pop()
-        logger.info("Searching %s", current_class)
-        for base_class in current_class.__bases__:
-            logger.info("++ Searching %s", base_class)
-            if base_class not in classes and base_class not in searching_classes:
-                searching_classes.append(base_class)
-        if current_class not in classes:
-            classes.append(current_class)
-    for current_class in classes:
-        logger.info("##### %s #####", current_class)
+        c = searching_classes.pop()
+        logger.info("Searching %s", c)
+        for b in c.__bases__:
+            logger.info("++ Searching %s", b)
+            if b not in classes and b not in searching_classes:
+                searching_classes.append(b)
+        if c not in classes:
+            classes.append(c)
+    for c in classes:
+        logger.info("##### %s #####", c)
         ops_path = None
         ops_code = ""
         ops_code_sep = False
         bl_idname: object = ""
-        if issubclass(current_class, Operator):
+        if issubclass(c, Operator):
             logger.info("##### ops #####")
-            bl_idname = convert_any.to_object(getattr(current_class, "bl_idname", None))
+            bl_idname = convert_any.to_object(getattr(c, "bl_idname", None))
             if isinstance(bl_idname, str):
                 dirs = bl_idname.split(".")
                 method = dirs.pop()
@@ -279,50 +268,46 @@ def main() -> int:
         ops_params: list[str] = []
         code = ""
 
-        collected_classes: list[type] = []
-        searching_hierarchy_classes: list[type] = [current_class]
-        while searching_hierarchy_classes:
-            current_hierarchy_class = searching_hierarchy_classes.pop()
-            if current_hierarchy_class in collected_classes:
+        cs: list[type] = []
+        searching_cs: list[type] = [c]
+        while searching_cs:
+            cc = searching_cs.pop()
+            if cc in cs:
                 continue
-            collected_classes.append(current_hierarchy_class)
-            searching_hierarchy_classes.extend(current_hierarchy_class.__bases__)
+            cs.append(cc)
+            searching_cs.extend(cc.__bases__)
 
-        processed_keys: list[str] = []
-        for inspected_class in collected_classes:
-            annotations = convert.mapping_or_none(
-                getattr(inspected_class, "__annotations__", None)
-            )
+        ks: list[str] = []
+        for c2 in cs:
+            annotations = convert.mapping_or_none(getattr(c2, "__annotations__", None))
             if annotations is None:
                 continue
-            for property_key, property_value in annotations.items():
-                if not isinstance(property_key, str):
+            for k, v in annotations.items():
+                if not isinstance(k, str):
                     raise TypeError
-                if property_key in processed_keys:
+                if k in ks:
                     continue
-                function: object = getattr(property_value, "function", None)
+                function: object = getattr(v, "function", None)
                 if function is None:
                     continue
                 function_name = getattr(function, "__qualname__", None)
                 if function_name is None:
                     continue
 
-                keywords = convert.mapping_or_none(
-                    getattr(property_value, "keywords", None)
-                )
+                keywords = convert.mapping_or_none(getattr(v, "keywords", None))
                 if keywords is None:
                     continue
                 typed_keywords: dict[str, object] = {
-                    keyword_key: keyword_value
-                    for keyword_key, keyword_value in keywords.items()
-                    if isinstance(keyword_key, str)
+                    typed_k: typed_v
+                    for typed_k, typed_v in keywords.items()
+                    if isinstance(typed_k, str)
                 }
                 code_line, ops_arg_line, ops_call_line = write_property_typing(
-                    property_key,
+                    k,
                     f"{function.__module__}.{function_name}",
                     typed_keywords,
                 )
-                if current_class == inspected_class:
+                if c == c2:
                     code += code_line
                 if ops_path is not None and ops_arg_line is not None:
                     if not ops_code_sep:
@@ -330,11 +315,11 @@ def main() -> int:
                         ops_code += "    *,\n"
                         ops_code_sep = True
                     if ops_call_line is None:
-                        ops_params.append(f"{property_key}={property_key}")
+                        ops_params.append(f"{k}={k}")
                     else:
                         ops_params.append(ops_call_line)
                     ops_code += ops_arg_line + "\n"
-                processed_keys.append(property_key)
+                ks.append(k)
         if ops_path is not None:
             ops_code += ") -> set[str]:\n"
             ops_code += (
@@ -347,18 +332,16 @@ def main() -> int:
             ops_code += "    )\n\n\n"
             logger.info("%s", ops_code)
             if not ops_path.exists():
-                ops_code = (
+                ops_path.write_text(
                     "# This code is auto generated.\n"
                     + "# To regenerate, run the"
                     + " `uv run tools/property_typing.py` command.\n\n"
                     + "from collections.abc import Mapping, Sequence\n"
                     + "from typing import Optional, Union\n\n"
                     + "import bpy\n\n\n"
-                ) + ops_code
-            if ops_path.exists():
-                ops_code = ops_path.read_text() + ops_code
-            ops_path.write_text(ops_code)
-        update_property_typing(current_class, code, more=more)
+                )
+            ops_path.write_text(ops_path.read_text() + ops_code)
+        update_property_typing(c, code, more=more)
     return 0
 
 

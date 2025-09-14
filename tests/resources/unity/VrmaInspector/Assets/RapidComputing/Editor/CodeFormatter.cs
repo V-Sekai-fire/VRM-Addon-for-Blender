@@ -17,7 +17,7 @@ namespace RapidComputing
                 new ProcessStartInfo
                 {
                     FileName = "dotnet",
-                    ArgumentList = { "csharpier", "format", assetPath },
+                    ArgumentList = { "csharpier", assetPath },
                     UseShellExecute = false,
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,

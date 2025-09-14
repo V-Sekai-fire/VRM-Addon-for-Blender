@@ -34,10 +34,9 @@ def draw_spring_bone1_collider_sphere_layout(
 ) -> None:
     layout.prop_search(collider.node, "bone_name", armature_data, "bones")
     layout.prop(collider, "ui_collider_type")
-    bpy_object = collider.bpy_object
-    if bpy_object:
-        layout.prop(bpy_object, "name", icon="MESH_UVSPHERE", text="Name")
-    layout.prop(collider.shape.sphere, "offset", text="Offset")
+    if collider.bpy_object:
+        layout.prop(collider.bpy_object, "name", icon="MESH_UVSPHERE", text="Offset")
+    layout.prop(collider.shape.sphere, "offset", text="")
     layout.separator(factor=0.5)
     layout.prop(collider.shape.sphere, "radius", slider=True)
     layout.prop(collider.extensions.vrmc_spring_bone_extended_collider, "enabled")
@@ -50,16 +49,15 @@ def draw_spring_bone1_collider_capsule_layout(
 ) -> None:
     layout.prop_search(collider.node, "bone_name", armature_data, "bones")
     layout.prop(collider, "ui_collider_type")
-    bpy_object = collider.bpy_object
-    if bpy_object:
-        layout.prop(bpy_object, "name", icon="MESH_UVSPHERE", text="Head")
+    if collider.bpy_object:
+        layout.prop(collider.bpy_object, "name", icon="MESH_UVSPHERE", text="Head")
     layout.prop(collider.shape.capsule, "offset", text="")
     layout.separator(factor=0.5)
     layout.prop(collider.shape.capsule, "radius", slider=True)
     layout.separator(factor=0.5)
-    if bpy_object and bpy_object.children:
+    if collider.bpy_object and collider.bpy_object.children:
         layout.prop(
-            bpy_object.children[0],
+            collider.bpy_object.children[0],
             "name",
             icon="MESH_UVSPHERE",
             text="Tail",
@@ -98,9 +96,8 @@ def draw_spring_bone1_collider_extended_sphere_layout(
     extended = collider.extensions.vrmc_spring_bone_extended_collider
     layout.prop_search(collider.node, "bone_name", armature_data, "bones")
     layout.prop(collider, "ui_collider_type")
-    bpy_object = collider.bpy_object
-    if bpy_object:
-        layout.prop(bpy_object, "name", icon="MESH_UVSPHERE", text="Offset")
+    if collider.bpy_object:
+        layout.prop(collider.bpy_object, "name", icon="MESH_UVSPHERE", text="Offset")
     layout.prop(extended.shape.sphere, "offset", text="")
     layout.separator(factor=0.5)
     layout.prop(extended.shape.sphere, "radius", slider=True)
@@ -121,16 +118,15 @@ def draw_spring_bone1_collider_extended_capsule_layout(
     extended = collider.extensions.vrmc_spring_bone_extended_collider
     layout.prop_search(collider.node, "bone_name", armature_data, "bones")
     layout.prop(collider, "ui_collider_type")
-    bpy_object = collider.bpy_object
-    if bpy_object:
-        layout.prop(bpy_object, "name", icon="MESH_UVSPHERE", text="Head")
+    if collider.bpy_object:
+        layout.prop(collider.bpy_object, "name", icon="MESH_UVSPHERE", text="Head")
     layout.prop(extended.shape.capsule, "offset", text="")
     layout.separator(factor=0.5)
     layout.prop(extended.shape.capsule, "radius", slider=True)
     layout.separator(factor=0.5)
-    if bpy_object and bpy_object.children:
+    if collider.bpy_object and collider.bpy_object.children:
         layout.prop(
-            bpy_object.children[0],
+            collider.bpy_object.children[0],
             "name",
             icon="MESH_UVSPHERE",
             text="Tail",
@@ -153,9 +149,8 @@ def draw_spring_bone1_collider_extended_plane_layout(
     extended = collider.extensions.vrmc_spring_bone_extended_collider
     layout.prop_search(collider.node, "bone_name", armature_data, "bones")
     layout.prop(collider, "ui_collider_type")
-    bpy_object = collider.bpy_object
-    if bpy_object:
-        layout.prop(bpy_object, "name", icon="MESH_UVSPHERE", text="Offset")
+    if collider.bpy_object:
+        layout.prop(collider.bpy_object, "name", icon="MESH_UVSPHERE", text="Offset")
     layout.prop(extended.shape.plane, "offset", text="")
     layout.separator(factor=0.5)
     layout.prop(extended.shape.plane, "normal")
@@ -237,7 +232,7 @@ def draw_spring_bone1_colliders_layout(
         _,
     ) = draw_template_list(
         colliders_box,
-        VRM_UL_spring_bone1_collider,
+        VRM_UL_spring_bone1_collider.bl_idname,
         spring_bone,
         "colliders",
         "active_collider_index",
@@ -248,7 +243,7 @@ def draw_spring_bone1_colliders_layout(
     )
 
     for collider_collection_op in collider_collection_ops:
-        collider_collection_op.armature_object_name = armature.name
+        collider_collection_op.armature_name = armature.name
 
     for collider_collection_item_op in collider_collection_item_ops:
         collider_collection_item_op.collider_index = collider_index
@@ -285,7 +280,7 @@ def draw_spring_bone1_collider_groups_layout(
         _,
     ) = draw_template_list(
         collider_groups_box,
-        VRM_UL_spring_bone1_collider_group,
+        VRM_UL_spring_bone1_collider_group.bl_idname,
         spring_bone,
         "collider_groups",
         "active_collider_group_index",
@@ -296,7 +291,7 @@ def draw_spring_bone1_collider_groups_layout(
     )
 
     for collider_group_collection_op in collider_group_collection_ops:
-        collider_group_collection_op.armature_object_name = armature.name
+        collider_group_collection_op.armature_name = armature.name
 
     for collider_group_collection_item_op in collider_group_collection_item_ops:
         collider_group_collection_item_op.collider_group_index = collider_group_index
@@ -322,7 +317,7 @@ def draw_spring_bone1_collider_groups_layout(
         _,
     ) = draw_template_list(
         colliders_column,
-        VRM_UL_spring_bone1_collider_group_collider,
+        VRM_UL_spring_bone1_collider_group_collider.bl_idname,
         collider_group,
         "colliders",
         "active_collider_index",
@@ -333,7 +328,7 @@ def draw_spring_bone1_collider_groups_layout(
     )
 
     for collider_collection_op in collider_collection_ops:
-        collider_collection_op.armature_object_name = armature.name
+        collider_collection_op.armature_name = armature.name
         collider_collection_op.collider_group_index = collider_group_index
 
     for collider_collection_item_op in collider_collection_item_ops:
@@ -370,7 +365,7 @@ def draw_spring_bone1_springs_layout(
         _,
     ) = draw_template_list(
         springs_box,
-        VRM_UL_spring_bone1_spring,
+        VRM_UL_spring_bone1_spring.bl_idname,
         spring_bone,
         "springs",
         "active_spring_index",
@@ -381,7 +376,7 @@ def draw_spring_bone1_springs_layout(
     )
 
     for spring_collection_op in spring_collection_ops:
-        spring_collection_op.armature_object_name = armature.name
+        spring_collection_op.armature_name = armature.name
 
     for spring_collection_item_op in spring_collection_item_ops:
         spring_collection_item_op.spring_index = spring_index
@@ -414,7 +409,7 @@ def draw_spring_bone1_springs_layout(
         (add_joint_op, _, _, _),
     ) = draw_template_list(
         joints_column,
-        VRM_UL_spring_bone1_joint,
+        VRM_UL_spring_bone1_joint.bl_idname,
         spring,
         "joints",
         "active_joint_index",
@@ -425,7 +420,7 @@ def draw_spring_bone1_springs_layout(
     )
 
     for joint_collection_op in joint_collection_ops:
-        joint_collection_op.armature_object_name = armature.name
+        joint_collection_op.armature_name = armature.name
         joint_collection_op.spring_index = spring_index
 
     for joint_collection_item_op in joint_collection_item_ops:
@@ -453,7 +448,7 @@ def draw_spring_bone1_springs_layout(
         _,
     ) = draw_template_list(
         collider_groups_column,
-        VRM_UL_spring_bone1_spring_collider_group,
+        VRM_UL_spring_bone1_spring_collider_group.bl_idname,
         spring,
         "collider_groups",
         "active_collider_group_index",
@@ -464,7 +459,7 @@ def draw_spring_bone1_springs_layout(
     )
 
     for collider_group_collection_op in collider_group_collection_ops:
-        collider_group_collection_op.armature_object_name = armature.name
+        collider_group_collection_op.armature_name = armature.name
         collider_group_collection_op.spring_index = spring_index
 
     for collider_group_collection_item_op in collider_group_collection_item_ops:

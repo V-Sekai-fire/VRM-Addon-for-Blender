@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: MIT OR GPL-3.0-or-later
+import functools
 import re
 import sys
 from collections.abc import Mapping, Sequence
@@ -117,15 +118,13 @@ class PrincipledBsdfNodeSocketTarget(NodeSocketTarget):
 
     @staticmethod
     def get_node_name(material: Material) -> Optional[str]:
-        # node has a short lifetime on the native side and is dangerous, so avoid
-        # exposing it outside the function
+        # nodeはネイティブ側の生存期間が短く危険なため、関数の外に露出しないようにする
         node = PrincipledBSDFWrapper(material).node_principled_bsdf
         if node is None:
             return None
-        # Use intern to avoid using str directly referenced from node that will be
-        # destroyed in the future
-        # Previously, using str referenced from destroyed Bone caused problems,
-        # so this is a precautionary measure, though it might be overly cautious
+        # internを用い、将来破棄されるnodeから直接参照されているstrを使わない
+        # 以前、破棄されたBoneから参照されていたstrを使うと壊れていたことがある
+        # のでそれを意識しての対応だが、気にしすぎかもしれない
         return sys.intern(node.name)
 
     def create_node_selector(self, material: Material) -> Callable[[Node], bool]:
@@ -163,15 +162,13 @@ class PrincipledBsdfNormalMapNodeSocketTarget(NodeSocketTarget):
 
     @staticmethod
     def get_node_name(material: Material) -> Optional[str]:
-        # node has a short lifetime on the native side and is dangerous, so avoid
-        # exposing it outside the function
+        # nodeはネイティブ側の生存期間が短く危険なため、関数の外に露出しないようにする
         node = PrincipledBSDFWrapper(material).node_normalmap
         if node is None:
             return None
-        # Use intern to avoid using str directly referenced from node that will be
-        # destroyed in the future
-        # Previously, using str referenced from destroyed Bone caused problems,
-        # so this is a precautionary measure, though it might be overly cautious
+        # internを用い、将来破棄されるnodeから直接参照されているstrを使わない
+        # 以前、破棄されたBoneから参照されていたstrを使うと壊れていたことがある
+        # のでそれを意識しての対応だが、気にしすぎかもしれない
         return sys.intern(node.name)
 
     def create_node_selector(self, material: Material) -> Callable[[Node], bool]:
@@ -213,19 +210,97 @@ class NodeGroupSocketTarget(NodeSocketTarget):
 
 
 class MaterialTraceablePropertyGroup(PropertyGroup):
-    def find_material(self) -> Material:
-        id_data = self.id_data
-        if isinstance(id_data, Material):
-            return id_data
+    SELF_KEY_NUMBER_TO_MATERIAL_INDEX_CACHE: Final[dict[int, int]] = {}
+    """selfを示す数値と、それに対応するマテリアルのインデックスのキャッシュ.
 
-        message = (
-            f"{type(self)}/{self}.id_data is not a {Material}"
-            + f" but {type(id_data)}/{id_data}"
+    本来ならselfからMaterialを引ける弱参照キャッシュにしたい。しかしそれらは
+    ネイティブオブジェクトであり、そのままキャッシュをするのは非常に危険になる。
+    そのため、代わりにselfに対応する数値からマテリアルのインデックスを引ける
+    キャッシュにした。
+    """
+
+    def match_material(
+        self, material: Material, material_property_chain: Sequence[str]
+    ) -> bool:
+        """selfに対応するマテリアルかどうかを調べる."""
+        property_group: object = get_material_mtoon1_extension(material)
+        for material_property in material_property_chain:
+            property_group = getattr(property_group, material_property, None)
+        return property_group == self
+
+    def find_material(self) -> Material:
+        """selfに対応するマテリアルを取得する.
+
+        このメソッドは利用頻度が高いので、プロファイルの結果に気をつける。
+        """
+        context = bpy.context
+
+        if self.id_data and self.id_data.is_evaluated:
+            logger.error("%s is evaluated. May cause a problem.", self)
+
+        material_property_chain = self.get_material_property_chain()
+
+        # この関数を以前実行した際のキャッシュが残っているかを調べる。
+        # キャッシュを使わない場合、リニアサーチが必要になり遅いことがわかっているため、
+        # 結果をキャッシュして再利用を試みる。
+        self_key_number = (
+            # ポインタをそのまま使わないで欲しいという気持ちを込める
+            ~self.as_pointer() ^ 0x01234567_89ABCDEF
         )
+        cached_material_index = self.SELF_KEY_NUMBER_TO_MATERIAL_INDEX_CACHE.get(
+            self_key_number
+        )
+        if cached_material_index is not None:
+            # キャッシュが残っている場合は、そのキャッシュが現在も有効かをチェックする
+            if (
+                0 <= cached_material_index < len(context.blend_data.materials)
+                and (
+                    cached_material := context.blend_data.materials[
+                        cached_material_index
+                    ]
+                )
+                and self.match_material(cached_material, material_property_chain)
+            ):
+                # キャッシュが有効だった場合はキャッシュから取得したマテリアルを返す
+                return cached_material
+            # キャッシュが無効な場合、その他全てのキャッシュも無効になっている可能性が
+            # 高いので全てのキャッシュを削除する。
+            self.SELF_KEY_NUMBER_TO_MATERIAL_INDEX_CACHE.clear()
+
+        # キャッシュが存在しなかった場合は、全てのマテリアルのリストの先頭からselfに
+        # 対応するものを探す。発見したらキャッシュにマテリアルのインデックスを保存。
+        for material_index, material in enumerate(context.blend_data.materials):
+            if not material:
+                continue
+            if cached_material_index == material_index:
+                continue
+            if self.match_material(material, material_property_chain):
+                self.SELF_KEY_NUMBER_TO_MATERIAL_INDEX_CACHE[self_key_number] = (
+                    material_index
+                )
+                return material
+
+        message = f"No matching material: {type(self)} {material_property_chain}"
         raise AssertionError(message)
 
+    @classmethod
+    def get_material_property_chain(cls) -> list[str]:
+        chain = convert.sequence_or_none(getattr(cls, "material_property_chain", None))
+        if chain is None:
+            message = f"No material property chain: {cls}.{type(chain)} => {chain}"
+            raise NotImplementedError(message)
+        result: list[str] = []
+        for property_name in chain:
+            if isinstance(property_name, str):
+                result.append(property_name)
+                continue
+            message = f"Invalid material property chain: {cls}.{type(chain)} => {chain}"
+            raise AssertionError(message)
+        return result
+
+    @classmethod
     def find_outline_property_group(
-        self, material: Material
+        cls, material: Material
     ) -> Optional["MaterialTraceablePropertyGroup"]:
         if get_material_mtoon1_extension(material).is_outline_material:
             return None
@@ -237,11 +312,13 @@ class MaterialTraceablePropertyGroup(PropertyGroup):
                 "Base material and outline material are same. name={material.name}"
             )
             return None
-        path_from_id = self.path_from_id()
-        property_group = outline_material.path_resolve(path_from_id, False)
-        if isinstance(property_group, MaterialTraceablePropertyGroup):
-            return property_group
-        message = f"No matching property group: {type(self)}/{self} {path_from_id}"
+        chain = cls.get_material_property_chain()
+        attr: object = get_material_mtoon1_extension(outline_material)
+        for name in chain:
+            attr = getattr(attr, name, None)
+        if isinstance(attr, MaterialTraceablePropertyGroup):
+            return attr
+        message = f"No matching property group: {cls} {chain}"
         raise AssertionError(message)
 
     def get_bool(
@@ -363,21 +440,15 @@ class MaterialTraceablePropertyGroup(PropertyGroup):
         self,
         node_group_name: str,
         group_label: str,
-        value_obj: object,
+        value: object,
     ) -> None:
-        if isinstance(value_obj, float):
-            value = convert.float_or_none(value_obj)
-            if value is None:
-                return
-        elif isinstance(value_obj, int):
-            value = value_obj
-        else:
-            return
-
         material = self.find_material()
         outline = self.find_outline_property_group(material)
         if outline:
             outline.set_value(node_group_name, group_label, value)
+
+        if not isinstance(value, (int, float)):
+            return
 
         node_tree = material.node_tree
         if not node_tree:
@@ -518,7 +589,7 @@ class MaterialTraceablePropertyGroup(PropertyGroup):
 
 class TextureTraceablePropertyGroup(MaterialTraceablePropertyGroup):
     def get_texture_info_property_group(self) -> "Mtoon1TextureInfoPropertyGroup":
-        chain = self.path_from_id().split(".")
+        chain = self.get_material_property_chain()
         if chain[-1:] == ["sampler"]:
             chain = chain[:-1]
         if chain[-1:] == ["index"]:
@@ -528,7 +599,8 @@ class TextureTraceablePropertyGroup(MaterialTraceablePropertyGroup):
         if chain[-1:] == ["extensions"]:
             chain = chain[:-1]
         material = self.find_material()
-        property_group = material.path_resolve(".".join(chain), False)
+        ext = get_material_mtoon1_extension(material)
+        property_group = functools.reduce(getattr, chain, ext)
         if not isinstance(property_group, Mtoon1TextureInfoPropertyGroup):
             message = f"{property_group} is not a Mtoon1TextureInfoPropertyGroup"
             raise TypeError(message)
@@ -554,18 +626,17 @@ class TextureTraceablePropertyGroup(MaterialTraceablePropertyGroup):
         out_node_socket_name: str,
         node_socket_target: NodeSocketTarget,
     ) -> None:
-        node_tree = material.node_tree
-        if not node_tree:
+        if not material.node_tree:
             return
 
         select_in_node = node_socket_target.create_node_selector(material)
         in_socket_name = node_socket_target.get_in_socket_name()
 
-        # Check if already connected
+        # 既につながっている場合は何もしない
         connection_check_node = next(
             (
                 link.from_node
-                for link in node_tree.links
+                for link in material.node_tree.links
                 if select_in_node(link.to_node)
                 and link.to_socket
                 and link.to_socket.name == in_socket_name
@@ -590,11 +661,11 @@ class TextureTraceablePropertyGroup(MaterialTraceablePropertyGroup):
                 continue
             break
 
-        # If connected to unrelated node, disconnect the link
+        # 関係ないノードとつながっている場合はリンクを切断
         cls.unlink_nodes(material, node_socket_target)
 
-        # Search for output node and socket
-        out_node = node_tree.nodes.get(out_node_name)
+        # 出力ノードとソケットを探す
+        out_node = material.node_tree.nodes.get(out_node_name)
         if not isinstance(out_node, out_node_type):
             logger.error("No output node: %s", out_node_name)
             return
@@ -619,9 +690,9 @@ class TextureTraceablePropertyGroup(MaterialTraceablePropertyGroup):
                 out_node = connection_check_node
                 break
 
-        # Search for input node and socket
+        # 入力ノードとソケットを探す
         in_node = next(
-            (n for n in node_tree.nodes if select_in_node(n)),
+            (n for n in material.node_tree.nodes if select_in_node(n)),
             None,
         )
         if not in_node:
@@ -633,7 +704,7 @@ class TextureTraceablePropertyGroup(MaterialTraceablePropertyGroup):
             logger.error("No input socket: %s", in_socket_name)
             return
 
-        node_tree.links.new(in_socket, out_socket)
+        material.node_tree.links.new(in_socket, out_socket)
 
     @classmethod
     def unlink_nodes(
@@ -643,8 +714,7 @@ class TextureTraceablePropertyGroup(MaterialTraceablePropertyGroup):
     ) -> None:
         while True:
             # Refresh in_node/out_node. These nodes may be invalidated.
-            node_tree = material.node_tree
-            if not node_tree:
+            if not material.node_tree:
                 return
 
             select_in_node = node_socket_target.create_node_selector(material)
@@ -652,7 +722,7 @@ class TextureTraceablePropertyGroup(MaterialTraceablePropertyGroup):
             disconnecting_link = next(
                 (
                     link
-                    for link in node_tree.links
+                    for link in material.node_tree.links
                     if select_in_node(link.to_node)
                     and link.to_socket
                     and link.to_socket.name == in_socket_name
@@ -662,7 +732,7 @@ class TextureTraceablePropertyGroup(MaterialTraceablePropertyGroup):
             if not disconnecting_link:
                 return
 
-            node_tree.links.remove(disconnecting_link)
+            material.node_tree.links.remove(disconnecting_link)
 
     @classmethod
     def link_or_unlink_nodes(
@@ -947,48 +1017,93 @@ class Mtoon1KhrTextureTransformPropertyGroup(TextureTraceablePropertyGroup):
 class Mtoon1BaseColorKhrTextureTransformPropertyGroup(
     Mtoon1KhrTextureTransformPropertyGroup
 ):
-    pass
+    material_property_chain = (
+        "pbr_metallic_roughness",
+        "base_color_texture",
+        "extensions",
+        "khr_texture_transform",
+    )
 
 
 class Mtoon1ShadeMultiplyKhrTextureTransformPropertyGroup(
     Mtoon1KhrTextureTransformPropertyGroup
 ):
-    pass
+    material_property_chain = (
+        "extensions",
+        "vrmc_materials_mtoon",
+        "shade_multiply_texture",
+        "extensions",
+        "khr_texture_transform",
+    )
 
 
 class Mtoon1NormalKhrTextureTransformPropertyGroup(
     Mtoon1KhrTextureTransformPropertyGroup
 ):
-    pass
+    material_property_chain = (
+        "normal_texture",
+        "extensions",
+        "khr_texture_transform",
+    )
 
 
 class Mtoon1ShadingShiftKhrTextureTransformPropertyGroup(
     Mtoon1KhrTextureTransformPropertyGroup
 ):
-    pass
+    material_property_chain = (
+        "extensions",
+        "vrmc_materials_mtoon",
+        "shading_shift_texture",
+        "extensions",
+        "khr_texture_transform",
+    )
 
 
 class Mtoon1EmissiveKhrTextureTransformPropertyGroup(
     Mtoon1KhrTextureTransformPropertyGroup
 ):
-    pass
+    material_property_chain = (
+        "emissive_texture",
+        "extensions",
+        "khr_texture_transform",
+    )
 
 
 class Mtoon1RimMultiplyKhrTextureTransformPropertyGroup(
     Mtoon1KhrTextureTransformPropertyGroup
 ):
-    pass
+    material_property_chain = (
+        "extensions",
+        "vrmc_materials_mtoon",
+        "rim_multiply_texture",
+        "extensions",
+        "khr_texture_transform",
+    )
 
 
 class Mtoon1MatcapKhrTextureTransformPropertyGroup(
     Mtoon1KhrTextureTransformPropertyGroup
 ):
-    pass
+    material_property_chain = (
+        "extensions",
+        "vrmc_materials_mtoon",
+        "matcap_texture",
+        "extensions",
+        "khr_texture_transform",
+    )
 
 
 class Mtoon1OutlineWidthMultiplyKhrTextureTransformPropertyGroup(
     Mtoon1KhrTextureTransformPropertyGroup
 ):
+    material_property_chain = (
+        "extensions",
+        "vrmc_materials_mtoon",
+        "outline_width_multiply_texture",
+        "extensions",
+        "khr_texture_transform",
+    )
+
     def set_texture_offset_and_outline(self, value: object) -> None:
         offset = convert.float2_or_none(value)
         if offset is None:
@@ -1041,7 +1156,13 @@ class Mtoon1OutlineWidthMultiplyKhrTextureTransformPropertyGroup(
 class Mtoon1UvAnimationMaskKhrTextureTransformPropertyGroup(
     Mtoon1KhrTextureTransformPropertyGroup
 ):
-    pass
+    material_property_chain = (
+        "extensions",
+        "vrmc_materials_mtoon",
+        "uv_animation_mask_texture",
+        "extensions",
+        "khr_texture_transform",
+    )
 
 
 class Mtoon1TextureInfoExtensionsPropertyGroup(PropertyGroup):
@@ -1231,10 +1352,9 @@ class Mtoon1SamplerPropertyGroup(TextureTraceablePropertyGroup):
         return default_value
 
     def set_mag_filter(self, value: int) -> None:
-        # If input value conflicts with TexImage value, change TexImage value
-        # If input value is GL_NEAREST and TexImage is Closest, delete internal value
-        # If input value is GL_LINEAR and TexImage is Linear/Cubic/Smart,
-        # delete internal value
+        # 入力値がTexImageの値と矛盾する場合は、TexImageの値を変更する
+        # 入力値がGL_NEARESTかつTexImageがClosestの場合は、内部値を削除する
+        # 入力値がGL_LINEARかつTexImageがLinear/Cubic/Smartの場合は、内部値を削除する
 
         if value not in self.mag_filter_enum.values():
             self.pop("mag_filter", None)
@@ -1285,9 +1405,8 @@ class Mtoon1SamplerPropertyGroup(TextureTraceablePropertyGroup):
         return default_value
 
     def set_min_filter(self, value: int) -> None:
-        # If input value is GL_NEAREST and TexImage is Closest, delete internal value
-        # If input value is GL_LINEAR and TexImage is Linear/Cubic/Smart,
-        # delete internal value
+        # 入力値がGL_NEARESTかつTexImageがClosestの場合は、内部値を削除する
+        # 入力値がGL_LINEARかつTexImageがLinear/Cubic/Smartの場合は、内部値を削除する
 
         if value not in self.min_filter_enum.values():
             self.pop("min_filter", None)
@@ -1436,39 +1555,88 @@ class Mtoon1SamplerPropertyGroup(TextureTraceablePropertyGroup):
 
 
 class Mtoon1BaseColorSamplerPropertyGroup(Mtoon1SamplerPropertyGroup):
-    pass
+    material_property_chain = (
+        "pbr_metallic_roughness",
+        "base_color_texture",
+        "index",
+        "sampler",
+    )
 
 
 class Mtoon1ShadeMultiplySamplerPropertyGroup(Mtoon1SamplerPropertyGroup):
-    pass
+    material_property_chain = (
+        "extensions",
+        "vrmc_materials_mtoon",
+        "shade_multiply_texture",
+        "index",
+        "sampler",
+    )
 
 
 class Mtoon1NormalSamplerPropertyGroup(Mtoon1SamplerPropertyGroup):
-    pass
+    material_property_chain = (
+        "normal_texture",
+        "index",
+        "sampler",
+    )
 
 
 class Mtoon1ShadingShiftSamplerPropertyGroup(Mtoon1SamplerPropertyGroup):
-    pass
+    material_property_chain = (
+        "extensions",
+        "vrmc_materials_mtoon",
+        "shading_shift_texture",
+        "index",
+        "sampler",
+    )
 
 
 class Mtoon1EmissiveSamplerPropertyGroup(Mtoon1SamplerPropertyGroup):
-    pass
+    material_property_chain = (
+        "emissive_texture",
+        "index",
+        "sampler",
+    )
 
 
 class Mtoon1RimMultiplySamplerPropertyGroup(Mtoon1SamplerPropertyGroup):
-    pass
+    material_property_chain = (
+        "extensions",
+        "vrmc_materials_mtoon",
+        "rim_multiply_texture",
+        "index",
+        "sampler",
+    )
 
 
 class Mtoon1MatcapSamplerPropertyGroup(Mtoon1SamplerPropertyGroup):
-    pass
+    material_property_chain = (
+        "extensions",
+        "vrmc_materials_mtoon",
+        "matcap_texture",
+        "index",
+        "sampler",
+    )
 
 
 class Mtoon1OutlineWidthMultiplySamplerPropertyGroup(Mtoon1SamplerPropertyGroup):
-    pass
+    material_property_chain = (
+        "extensions",
+        "vrmc_materials_mtoon",
+        "outline_width_multiply_texture",
+        "index",
+        "sampler",
+    )
 
 
 class Mtoon1UvAnimationMaskSamplerPropertyGroup(Mtoon1SamplerPropertyGroup):
-    pass
+    material_property_chain = (
+        "extensions",
+        "vrmc_materials_mtoon",
+        "uv_animation_mask_texture",
+        "index",
+        "sampler",
+    )
 
 
 class Mtoon1TexturePropertyGroup(TextureTraceablePropertyGroup):
@@ -1485,14 +1653,12 @@ class Mtoon1TexturePropertyGroup(TextureTraceablePropertyGroup):
     )
 
     def update_source_for_desynced_node_tree(self, context: Context) -> None:
-        """Update PointerProperty() passed to prop() when not synced with NodeTree.
+        """NodeTreeと同期してしていない場合にprop()に渡すPointerProperty()を更新.
 
-        When not synced with NodeTree, want to display the correct Image name on
-        the Placeholder side of prop().
-        Therefore, it operates as follows:
-        - Always display Placeholder, so the value always returns None
-        - When a value is input from outside, reset the value to None and
-            transfer to self.source
+        NodeTreeと同期してしていない場合にprop()のPlaceholder側に正しいImageの名前を表示したい。
+        そのため、次のように動作する。
+        - 必ずPlaceholderを表示するため、値は常にNoneを返すようにする
+        - 値が外部から入力されたら、値をNoneに戻してself.sourceに転送
         """
         original_syncing_source_name: Optional[str] = None
         if self.source_for_desynced_node_tree:
@@ -1526,6 +1692,12 @@ class Mtoon1TexturePropertyGroup(TextureTraceablePropertyGroup):
 
 
 class Mtoon1BaseColorTexturePropertyGroup(Mtoon1TexturePropertyGroup):
+    material_property_chain = (
+        "pbr_metallic_roughness",
+        "base_color_texture",
+        "index",
+    )
+
     label = "Lit Color, Alpha"
     panel_label = label
     colorspace = "sRGB"
@@ -1550,6 +1722,13 @@ class Mtoon1BaseColorTexturePropertyGroup(Mtoon1TexturePropertyGroup):
 
 
 class Mtoon1ShadeMultiplyTexturePropertyGroup(Mtoon1TexturePropertyGroup):
+    material_property_chain = (
+        "extensions",
+        "vrmc_materials_mtoon",
+        "shade_multiply_texture",
+        "index",
+    )
+
     label = "Shade Color"
     panel_label = label
     colorspace = "sRGB"
@@ -1565,6 +1744,11 @@ class Mtoon1ShadeMultiplyTexturePropertyGroup(Mtoon1TexturePropertyGroup):
 
 
 class Mtoon1NormalTexturePropertyGroup(Mtoon1TexturePropertyGroup):
+    material_property_chain = (
+        "normal_texture",
+        "index",
+    )
+
     label = "Normal Map"
     panel_label = label
     colorspace = "Non-Color"
@@ -1580,6 +1764,13 @@ class Mtoon1NormalTexturePropertyGroup(Mtoon1TexturePropertyGroup):
 
 
 class Mtoon1ShadingShiftTexturePropertyGroup(Mtoon1TexturePropertyGroup):
+    material_property_chain = (
+        "extensions",
+        "vrmc_materials_mtoon",
+        "shading_shift_texture",
+        "index",
+    )
+
     label = "Additive Shading Shift"
     panel_label = label
     colorspace = "Non-Color"
@@ -1595,6 +1786,11 @@ class Mtoon1ShadingShiftTexturePropertyGroup(Mtoon1TexturePropertyGroup):
 
 
 class Mtoon1EmissiveTexturePropertyGroup(Mtoon1TexturePropertyGroup):
+    material_property_chain = (
+        "emissive_texture",
+        "index",
+    )
+
     label = "Emission"
     panel_label = label
     colorspace = "sRGB"
@@ -1610,6 +1806,13 @@ class Mtoon1EmissiveTexturePropertyGroup(Mtoon1TexturePropertyGroup):
 
 
 class Mtoon1RimMultiplyTexturePropertyGroup(Mtoon1TexturePropertyGroup):
+    material_property_chain = (
+        "extensions",
+        "vrmc_materials_mtoon",
+        "rim_multiply_texture",
+        "index",
+    )
+
     label = "Rim Color"
     panel_label = label
     colorspace = "sRGB"
@@ -1625,6 +1828,13 @@ class Mtoon1RimMultiplyTexturePropertyGroup(Mtoon1TexturePropertyGroup):
 
 
 class Mtoon1MatcapTexturePropertyGroup(Mtoon1TexturePropertyGroup):
+    material_property_chain = (
+        "extensions",
+        "vrmc_materials_mtoon",
+        "matcap_texture",
+        "index",
+    )
+
     label = "Matcap Rim"
     panel_label = label
     colorspace = "sRGB"
@@ -1640,6 +1850,13 @@ class Mtoon1MatcapTexturePropertyGroup(Mtoon1TexturePropertyGroup):
 
 
 class Mtoon1OutlineWidthMultiplyTexturePropertyGroup(Mtoon1TexturePropertyGroup):
+    material_property_chain = (
+        "extensions",
+        "vrmc_materials_mtoon",
+        "outline_width_multiply_texture",
+        "index",
+    )
+
     label = "Outline Width"
     panel_label = label
     colorspace = "Non-Color"
@@ -1662,6 +1879,13 @@ class Mtoon1OutlineWidthMultiplyTexturePropertyGroup(Mtoon1TexturePropertyGroup)
 
 
 class Mtoon1UvAnimationMaskTexturePropertyGroup(Mtoon1TexturePropertyGroup):
+    material_property_chain = (
+        "extensions",
+        "vrmc_materials_mtoon",
+        "uv_animation_mask_texture",
+        "index",
+    )
+
     label = "UV Animation Mask"
     panel_label = "Mask"
     colorspace = "Non-Color"
@@ -1762,7 +1986,7 @@ class Mtoon1TextureInfoPropertyGroup(MaterialTraceablePropertyGroup):
 
     def setup_drivers(self, material: Material) -> None:
         mtoon1 = get_material_mtoon1_extension(material)
-        if not mtoon1.enabled:
+        if not mtoon1.get_enabled_in_material(material):
             return
         node_tree = material.node_tree
         if not node_tree:
@@ -1859,8 +2083,8 @@ class Mtoon1TextureInfoPropertyGroup(MaterialTraceablePropertyGroup):
                 + f".size[{size_index}]"
             )
             if target.data_path != target_data_path or (
-                # Blender 2.93 sets is_valid to False once image is deleted.
-                # This is resolved by resetting data_path.
+                # Blender 2.93では、一度imageを削除するとis_validがFalseになる。
+                # data_pathを再設定することで解消。
                 image_exists and (not fcurve.is_valid or not driver.is_valid)
             ):
                 target.data_path = target_data_path
@@ -1875,6 +2099,11 @@ class Mtoon1TextureInfoPropertyGroup(MaterialTraceablePropertyGroup):
 
 # https://github.com/KhronosGroup/glTF/blob/1ab49ec412e638f2e5af0289e9fbb60c7271e457/specification/2.0/schema/textureInfo.schema.json
 class Mtoon1BaseColorTextureInfoPropertyGroup(Mtoon1TextureInfoPropertyGroup):
+    material_property_chain = (
+        "pbr_metallic_roughness",
+        "base_color_texture",
+    )
+
     node_socket_targets: Mapping[str, Sequence[NodeSocketTarget]] = {
         TEX_IMAGE_COLOR_OUTPUT_KEY: [
             NodeGroupSocketTarget(
@@ -1910,6 +2139,12 @@ class Mtoon1BaseColorTextureInfoPropertyGroup(Mtoon1TextureInfoPropertyGroup):
 
 
 class Mtoon1ShadeMultiplyTextureInfoPropertyGroup(Mtoon1TextureInfoPropertyGroup):
+    material_property_chain = (
+        "extensions",
+        "vrmc_materials_mtoon",
+        "shade_multiply_texture",
+    )
+
     node_socket_targets: Mapping[str, Sequence[NodeSocketTarget]] = {
         TEX_IMAGE_COLOR_OUTPUT_KEY: [
             NodeGroupSocketTarget(
@@ -1937,6 +2172,8 @@ class Mtoon1ShadeMultiplyTextureInfoPropertyGroup(Mtoon1TextureInfoPropertyGroup
 
 # https://github.com/KhronosGroup/glTF/blob/1ab49ec412e638f2e5af0289e9fbb60c7271e457/specification/2.0/schema/material.normalTextureInfo.schema.json
 class Mtoon1NormalTextureInfoPropertyGroup(Mtoon1TextureInfoPropertyGroup):
+    material_property_chain = ("normal_texture",)
+
     node_socket_targets: Mapping[str, Sequence[NodeSocketTarget]] = {
         TEX_IMAGE_COLOR_OUTPUT_KEY: [
             NodeGroupSocketTarget(
@@ -2002,6 +2239,12 @@ class Mtoon1NormalTextureInfoPropertyGroup(Mtoon1TextureInfoPropertyGroup):
 
 # https://github.com/vrm-c/vrm-specification/blob/c5d1afdc4d59c292cb4fd6d54cad1dc0c4d19c60/specification/VRMC_materials_mtoon-1.0/schema/mtoon.shadingShiftTexture.schema.json
 class Mtoon1ShadingShiftTextureInfoPropertyGroup(Mtoon1TextureInfoPropertyGroup):
+    material_property_chain = (
+        "extensions",
+        "vrmc_materials_mtoon",
+        "shading_shift_texture",
+    )
+
     node_socket_targets: Mapping[str, Sequence[NodeSocketTarget]] = {
         TEX_IMAGE_COLOR_OUTPUT_KEY: [
             NodeGroupSocketTarget(
@@ -2052,6 +2295,8 @@ class Mtoon1ShadingShiftTextureInfoPropertyGroup(Mtoon1TextureInfoPropertyGroup)
 
 # https://github.com/KhronosGroup/glTF/blob/1ab49ec412e638f2e5af0289e9fbb60c7271e457/specification/2.0/schema/textureInfo.schema.json
 class Mtoon1EmissiveTextureInfoPropertyGroup(Mtoon1TextureInfoPropertyGroup):
+    material_property_chain = ("emissive_texture",)
+
     node_socket_targets: Mapping[str, Sequence[NodeSocketTarget]] = {
         TEX_IMAGE_COLOR_OUTPUT_KEY: [
             NodeGroupSocketTarget(
@@ -2082,6 +2327,12 @@ class Mtoon1EmissiveTextureInfoPropertyGroup(Mtoon1TextureInfoPropertyGroup):
 
 
 class Mtoon1RimMultiplyTextureInfoPropertyGroup(Mtoon1TextureInfoPropertyGroup):
+    material_property_chain = (
+        "extensions",
+        "vrmc_materials_mtoon",
+        "rim_multiply_texture",
+    )
+
     node_socket_targets: Mapping[str, Sequence[NodeSocketTarget]] = {
         TEX_IMAGE_COLOR_OUTPUT_KEY: [
             NodeGroupSocketTarget(
@@ -2108,6 +2359,12 @@ class Mtoon1RimMultiplyTextureInfoPropertyGroup(Mtoon1TextureInfoPropertyGroup):
 
 
 class Mtoon1MatcapTextureInfoPropertyGroup(Mtoon1TextureInfoPropertyGroup):
+    material_property_chain = (
+        "extensions",
+        "vrmc_materials_mtoon",
+        "matcap_texture",
+    )
+
     node_socket_targets: Mapping[str, Sequence[NodeSocketTarget]] = {
         TEX_IMAGE_COLOR_OUTPUT_KEY: [
             NodeGroupSocketTarget(
@@ -2136,6 +2393,12 @@ class Mtoon1MatcapTextureInfoPropertyGroup(Mtoon1TextureInfoPropertyGroup):
 class Mtoon1OutlineWidthMultiplyTextureInfoPropertyGroup(
     Mtoon1TextureInfoPropertyGroup
 ):
+    material_property_chain = (
+        "extensions",
+        "vrmc_materials_mtoon",
+        "outline_width_multiply_texture",
+    )
+
     node_socket_targets: Mapping[str, Sequence[NodeSocketTarget]] = {
         TEX_IMAGE_COLOR_OUTPUT_KEY: [
             NodeGroupSocketTarget(
@@ -2162,6 +2425,12 @@ class Mtoon1OutlineWidthMultiplyTextureInfoPropertyGroup(
 
 
 class Mtoon1UvAnimationMaskTextureInfoPropertyGroup(Mtoon1TextureInfoPropertyGroup):
+    material_property_chain = (
+        "extensions",
+        "vrmc_materials_mtoon",
+        "uv_animation_mask_texture",
+    )
+
     node_socket_targets: Mapping[str, Sequence[NodeSocketTarget]] = {
         TEX_IMAGE_COLOR_OUTPUT_KEY: [
             NodeGroupSocketTarget(
@@ -2259,6 +2528,8 @@ class Mtoon0ShadingGradeTexturePropertyGroup(Mtoon0TexturePropertyGroup):
 
 # https://github.com/KhronosGroup/glTF/blob/1ab49ec412e638f2e5af0289e9fbb60c7271e457/specification/2.0/schema/material.pbrMetallicRoughness.schema.json#L9-L26
 class Mtoon1PbrMetallicRoughnessPropertyGroup(MaterialTraceablePropertyGroup):
+    material_property_chain = ("pbr_metallic_roughness",)
+
     def get_base_color_factor(self) -> tuple[float, float, float, float]:
         rgb = self.get_rgb(
             shader.OUTPUT_GROUP_NAME,
@@ -2332,6 +2603,8 @@ class Mtoon1PbrMetallicRoughnessPropertyGroup(MaterialTraceablePropertyGroup):
 
 
 class Mtoon1VrmcMaterialsMtoonPropertyGroup(MaterialTraceablePropertyGroup):
+    material_property_chain = ("extensions", "vrmc_materials_mtoon")
+
     def get_transparent_with_z_write(self) -> bool:
         return self.get_bool(
             shader.OUTPUT_GROUP_NAME,
@@ -2887,6 +3160,11 @@ class Mtoon1VrmcMaterialsMtoonPropertyGroup(MaterialTraceablePropertyGroup):
 
 # https://github.com/KhronosGroup/glTF/blob/d997b7dc7e426bc791f5613475f5b4490da0b099/extensions/2.0/Khronos/KHR_materials_emissive_strength/schema/glTF.KHR_materials_emissive_strength.schema.json
 class Mtoon1KhrMaterialsEmissiveStrengthPropertyGroup(MaterialTraceablePropertyGroup):
+    material_property_chain = (
+        "extensions",
+        "khr_materials_emissive_strength",
+    )
+
     def get_emissive_strength(self) -> float:
         return self.get_float(
             shader.OUTPUT_GROUP_NAME,
@@ -2965,6 +3243,8 @@ class Mtoon1MaterialExtensionsPropertyGroup(PropertyGroup):
 
 # https://github.com/vrm-c/vrm-specification/blob/8dc51ec7241be27ee95f159cefc0190a0e41967b/specification/VRMC_materials_mtoon-1.0-beta/schema/VRMC_materials_mtoon.schema.json
 class Mtoon1MaterialPropertyGroup(MaterialTraceablePropertyGroup):
+    material_property_chain: tuple[str, ...] = ()
+
     INITIAL_ADDON_VERSION = VrmAddonPreferences.INITIAL_ADDON_VERSION
 
     addon_version: IntVectorProperty(  # type: ignore[valid-type]
@@ -3007,7 +3287,7 @@ class Mtoon1MaterialPropertyGroup(MaterialTraceablePropertyGroup):
         if not node_tree:
             return
 
-        # Align with glTF nodes
+        # glTFのノードに合わせる
         # https://docs.blender.org/manual/en/4.2/addons/import_export/scene_gltf2.html#alpha-modes
         mtoon1 = get_material_mtoon1_extension(material)
         texture = mtoon1.pbr_metallic_roughness.base_color_texture.index
@@ -3334,11 +3614,10 @@ class Mtoon1MaterialPropertyGroup(MaterialTraceablePropertyGroup):
         type=Mtoon1MaterialExtensionsPropertyGroup
     )
 
-    def get_enabled(self) -> bool:
+    def get_enabled_in_material(self, material: Material) -> bool:
         if self.is_outline_material:
             return False
 
-        material = self.find_material()
         if not material.use_nodes:
             return False
 
@@ -3359,6 +3638,9 @@ class Mtoon1MaterialPropertyGroup(MaterialTraceablePropertyGroup):
 
         return bool(self.get("enabled"))
 
+    def get_enabled(self) -> bool:
+        return self.get_enabled_in_material(self.find_material())
+
     def set_enabled(self, value: object) -> None:
         material = self.find_material()
 
@@ -3370,7 +3652,7 @@ class Mtoon1MaterialPropertyGroup(MaterialTraceablePropertyGroup):
 
         if not material.use_nodes:
             material.use_nodes = True
-        if self.enabled:
+        if self.get_enabled():
             return
 
         ops.vrm.convert_material_to_mtoon1(material_name=material.name)
@@ -3525,19 +3807,18 @@ class Mtoon1MaterialPropertyGroup(MaterialTraceablePropertyGroup):
         if self.mtoon0_render_queue != mtoon0_render_queue:
             self.mtoon0_render_queue = mtoon0_render_queue
 
-    # Set the Render Queue value for MToon0. Performs clamping when assigning values.
-    # UniVRM performs clamping when setting values from UI or when changing
-    # Alpha Mode etc., so use this to match that behavior.
+    # MToon0用のRender Queueの値を設定する。値代入時にクランプを行う。
+    # UniVRMはUIからの値設定時や、Alpha Modeなどの変更時にクランプを行うため、
+    # それと挙動を合わせる際はこちらを使う。
     mtoon0_render_queue_and_clamp: IntProperty(  # type: ignore[valid-type]
         name="Render Queue",
         get=get_mtoon0_render_queue_and_clamp,
         set=set_mtoon0_render_queue_and_clamp,
     )
 
-    # Set the Render Queue value for MToon0. Does not perform clamping when
-    # assigning values.
-    # UniVRM does not perform clamping during VRM0 import or export,
-    # so use this during import or export to match that behavior.
+    # MToon0用のRender Queueの値を設定する。値代入時にクランプを行わない。
+    # UniVRMはVRM0のインポート時やエクスポート時はクランプを行わないため、
+    # それと挙動を合わせるためインポート時やエクスポート時はこちらを使う。
     mtoon0_render_queue: IntProperty(  # type: ignore[valid-type]
         name="Render Queue",
         default=2000,
@@ -3644,18 +3925,16 @@ def reset_shader_node_group(
             material,
             reset_node_groups=reset_node_groups,
         )
-        outline_material = gltf.outline_material
-        if outline_material:
+        if gltf.outline_material:
             shader.load_mtoon1_shader(
                 context,
-                outline_material,
+                gltf.outline_material,
                 reset_node_groups=reset_node_groups,
             )
 
     gltf.is_outline_material = False
-    outline_material = gltf.outline_material
-    if outline_material:
-        get_material_mtoon1_extension(outline_material).is_outline_material = True
+    if gltf.outline_material:
+        get_material_mtoon1_extension(gltf.outline_material).is_outline_material = True
 
     gltf.pbr_metallic_roughness.base_color_factor = base_color_factor
     gltf.pbr_metallic_roughness.base_color_texture.restore(base_color_texture)

@@ -1,5 +1,4 @@
 # SPDX-License-Identifier: MIT OR GPL-3.0-or-later
-import traceback
 from collections.abc import Set as AbstractSet
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
@@ -19,8 +18,7 @@ from bpy.types import (
 )
 from bpy_extras.io_utils import ExportHelper
 
-from ..common import ops, safe_removal, version
-from ..common.error_dialog import show_error_dialog
+from ..common import ops, version
 from ..common.logger import get_logger
 from ..common.preferences import (
     ExportPreferencesProtocol,
@@ -47,9 +45,9 @@ from ..editor.vrm1.panel import (
 )
 from ..editor.vrm1.property_group import Vrm1HumanBonesPropertyGroup
 from .abstract_base_vrm_exporter import AbstractBaseVrmExporter
-from .uni_vrm_vrm_animation_exporter import UniVrmVrmAnimationExporter
 from .vrm0_exporter import Vrm0Exporter
 from .vrm1_exporter import Vrm1Exporter
+from .vrm_animation_exporter import VrmAnimationExporter
 
 logger = get_logger(__name__)
 
@@ -95,20 +93,29 @@ class EXPORT_SCENE_OT_vrm(Operator, ExportHelper):
         name="Enable Advanced Options",
         update=export_vrm_update_addon_preferences,
     )
+    export_ext_bmesh_encoding: BoolProperty(  # type: ignore[valid-type]
+        name="Export EXT_bmesh_encoding",
+        description="Enable BMesh topology preservation using EXT_bmesh_encoding extension",
+        update=export_vrm_update_addon_preferences,
+    )
     export_all_influences: BoolProperty(  # type: ignore[valid-type]
         name="Export All Bone Influences",
+        description="Don't limit to 4, most viewers truncate to 4, "
+        + "so bone movement may cause jagged meshes",
         update=export_vrm_update_addon_preferences,
+        # The upstream says that Models may appear incorrectly in many viewers.
+        # https://github.com/KhronosGroup/glTF-Blender-IO/blob/356b3dda976303d3ecce8b3bd1591245e576db38/addons/io_scene_gltf2/__init__.py#L760
+        default=False,
     )
     export_lights: BoolProperty(  # type: ignore[valid-type]
         name="Export Lights",
-        update=export_vrm_update_addon_preferences,
     )
     export_gltf_animations: BoolProperty(  # type: ignore[valid-type]
         name="Export glTF Animations",
-        update=export_vrm_update_addon_preferences,
     )
     export_try_sparse_sk: BoolProperty(  # type: ignore[valid-type]
-        name="Use Sparse Accessors",
+        name="Export Sparse Shape Keys",
+        description="Try to use sparse accessor for shape keys",
         update=export_vrm_update_addon_preferences,
     )
 
@@ -124,27 +131,19 @@ class EXPORT_SCENE_OT_vrm(Operator, ExportHelper):
     )
 
     def execute(self, context: Context) -> set[str]:
-        try:
-            if not self.filepath:
-                return {"CANCELLED"}
+        if not self.filepath:
+            return {"CANCELLED"}
 
-            if self.use_addon_preferences:
-                copy_export_preferences(
-                    source=get_preferences(context), destination=self
-                )
+        if self.use_addon_preferences:
+            copy_export_preferences(source=get_preferences(context), destination=self)
 
-            return export_vrm(
-                Path(self.filepath),
-                self,
-                context,
-                armature_object_name=self.armature_object_name,
-            )
-        except Exception:
-            show_error_dialog(
-                pgettext("Failed to export VRM."),
-                traceback.format_exc(),
-            )
-            raise
+        return export_vrm(
+            Path(self.filepath),
+            self,
+            context,
+            armature_object_name=self.armature_object_name,
+            export_ext_bmesh_encoding=self.export_ext_bmesh_encoding,
+        )
 
     def invoke(self, context: Context, event: Event) -> set[str]:
         self.use_addon_preferences = True
@@ -155,11 +154,15 @@ class EXPORT_SCENE_OT_vrm(Operator, ExportHelper):
                 "INVOKE_DEFAULT",
             )
 
-        armatures, _ = collect_export_objects(
+        export_objects = search.export_objects(
             context,
             self.armature_object_name,
-            self,
+            export_invisibles=self.export_invisibles,
+            export_only_selections=self.export_only_selections,
+            export_lights=self.export_lights,
         )
+
+        armatures = [obj for obj in export_objects if obj.type == "ARMATURE"]
         if len(armatures) > 1:
             return ops.wm.vrm_export_armature_selection("INVOKE_DEFAULT")
         if len(armatures) == 1:
@@ -178,7 +181,7 @@ class EXPORT_SCENE_OT_vrm(Operator, ExportHelper):
                     for b in humanoid.human_bones
                 ):
                     ops.vrm.assign_vrm0_humanoid_human_bones_automatically(
-                        armature_object_name=armature.name
+                        armature_name=armature.name
                     )
                 if not humanoid.all_required_bones_are_assigned():
                     return ops.wm.vrm_export_human_bones_assignment(
@@ -200,7 +203,7 @@ class EXPORT_SCENE_OT_vrm(Operator, ExportHelper):
                     )
                 ):
                     ops.vrm.assign_vrm1_humanoid_human_bones_automatically(
-                        armature_object_name=armature.name
+                        armature_name=armature.name
                     )
                 if (
                     not human_bones.all_required_bones_are_assigned()
@@ -243,6 +246,7 @@ class EXPORT_SCENE_OT_vrm(Operator, ExportHelper):
         export_invisibles: bool  # type: ignore[no-redef]
         export_only_selections: bool  # type: ignore[no-redef]
         enable_advanced_preferences: bool  # type: ignore[no-redef]
+        export_ext_bmesh_encoding: bool  # type: ignore[no-redef]
         export_all_influences: bool  # type: ignore[no-redef]
         export_lights: bool  # type: ignore[no-redef]
         export_gltf_animations: bool  # type: ignore[no-redef]
@@ -260,6 +264,7 @@ def export_vrm(
     context: Context,
     *,
     armature_object_name: str,
+    export_ext_bmesh_encoding: bool = False,
 ) -> set[str]:
     if ops.vrm.model_validate(
         "INVOKE_DEFAULT",
@@ -268,18 +273,36 @@ def export_vrm(
     ) != {"FINISHED"}:
         return {"CANCELLED"}
 
-    armature_objects, export_objects = collect_export_objects(
-        context,
-        armature_object_name,
-        export_preferences,
+    (
+        export_all_influences,
+        export_lights,
+        export_gltf_animations,
+    ) = (
+        (
+            export_preferences.export_all_influences,
+            export_preferences.export_lights,
+            export_preferences.export_gltf_animations,
+        )
+        if export_preferences.enable_advanced_preferences
+        else (False, False, False)
     )
 
-    armature_object: Optional[Object] = next(iter(armature_objects), None)
+    export_objects = search.export_objects(
+        context,
+        armature_object_name,
+        export_invisibles=export_preferences.export_invisibles,
+        export_only_selections=export_preferences.export_only_selections,
+        export_lights=export_lights,
+    )
+
+    armature_object: Optional[Object] = next(
+        (obj for obj in export_objects if obj.type == "ARMATURE"), None
+    )
     is_vrm1 = False
 
     with save_workspace(
         context,
-        # Allow restoring after changing active object
+        # アクティブオブジェクト変更しても元に戻せるようにする
         armature_object,
     ):
         if armature_object:
@@ -309,6 +332,7 @@ def export_vrm(
                 context,
                 export_objects,
                 armature_object,
+                export_ext_bmesh_encoding=export_ext_bmesh_encoding,
             )
 
         vrm_bytes = vrm_exporter.export_vrm()
@@ -317,10 +341,12 @@ def export_vrm(
 
     Path(filepath).write_bytes(vrm_bytes)
 
-    if armature_object_is_temporary and not safe_removal.remove_object(
-        context, armature_object
-    ):
-        logger.warning("Failed to remove temporary armature")
+    if armature_object_is_temporary:
+        if armature_object.users <= 1:
+            # アクティブオブジェクトから外れた後にremoveする
+            context.blend_data.objects.remove(armature_object)
+        else:
+            logger.warning("Failed to remove temporary armature")
 
     return {"FINISHED"}
 
@@ -362,23 +388,7 @@ class VRM_PT_export_file_browser_tool_props(Panel):
                     icon="NONE" if index else "ERROR",
                 )
 
-        show_vrm1_options = False
-        armature_objects, _ = collect_export_objects(
-            context, operator.armature_object_name, operator
-        )
-        if (
-            armature_objects
-            and (armature_object := armature_objects[0])
-            and (armature_data := armature_object.data)
-            and isinstance(armature_data, Armature)
-        ):
-            show_vrm1_options = get_armature_extension(armature_data).is_vrm1()
-
-        draw_export_preferences_layout(
-            operator,
-            layout,
-            show_vrm1_options=show_vrm1_options,
-        )
+        draw_export_preferences_layout(operator, layout)
 
         if operator.errors:
             validation.WM_OT_vrm_validator.draw_errors(
@@ -438,28 +448,19 @@ class EXPORT_SCENE_OT_vrma(Operator, ExportHelper):
     )
 
     def execute(self, context: Context) -> set[str]:
-        try:
-            if WM_OT_vrma_export_prerequisite.detect_errors(
-                context, self.armature_object_name
-            ):
-                return {"CANCELLED"}
-            if not self.filepath:
-                return {"CANCELLED"}
-            if not self.armature_object_name:
-                armature = search.current_armature(context)
-            else:
-                armature = context.blend_data.objects.get(self.armature_object_name)
-            if not armature:
-                return {"CANCELLED"}
-            return UniVrmVrmAnimationExporter.execute(
-                context, Path(self.filepath), armature
-            )
-        except Exception:
-            show_error_dialog(
-                pgettext("Failed to export VRM Animation."),
-                traceback.format_exc(),
-            )
-            raise
+        if WM_OT_vrma_export_prerequisite.detect_errors(
+            context, self.armature_object_name
+        ):
+            return {"CANCELLED"}
+        if not self.filepath:
+            return {"CANCELLED"}
+        if not self.armature_object_name:
+            armature = search.current_armature(context)
+        else:
+            armature = context.blend_data.objects.get(self.armature_object_name)
+        if not armature:
+            return {"CANCELLED"}
+        return VrmAnimationExporter.execute(context, Path(self.filepath), armature)
 
     def invoke(self, context: Context, event: Event) -> set[str]:
         if WM_OT_vrma_export_prerequisite.detect_errors(
@@ -482,7 +483,7 @@ class EXPORT_SCENE_OT_vrma(Operator, ExportHelper):
 
 
 class WM_OT_vrm_export_human_bones_assignment(Operator):
-    bl_label = "Required VRM Human Bones Assignment"
+    bl_label = "VRM Required Bones Assignment"
     bl_idname = "wm.vrm_export_human_bones_assignment"
     bl_options: AbstractSet[str] = {"REGISTER"}
 
@@ -492,11 +493,14 @@ class WM_OT_vrm_export_human_bones_assignment(Operator):
 
     def execute(self, context: Context) -> set[str]:
         preferences = get_preferences(context)
-        armatures, _ = collect_export_objects(
+        export_objects = search.export_objects(
             context,
             self.armature_object_name,
-            preferences,
+            export_invisibles=preferences.export_invisibles,
+            export_only_selections=preferences.export_only_selections,
+            export_lights=preferences.export_lights,
         )
+        armatures = [obj for obj in export_objects if obj.type == "ARMATURE"]
         if len(armatures) != 1:
             return {"CANCELLED"}
         armature = armatures[0]
@@ -535,9 +539,17 @@ class WM_OT_vrm_export_human_bones_assignment(Operator):
 
     def draw(self, context: Context) -> None:
         preferences = get_preferences(context)
-        armatures, _ = collect_export_objects(
-            context, self.armature_object_name, preferences
-        )
+        armatures = [
+            obj
+            for obj in search.export_objects(
+                context,
+                self.armature_object_name,
+                export_invisibles=preferences.export_invisibles,
+                export_only_selections=preferences.export_only_selections,
+                export_lights=preferences.export_lights,
+            )
+            if obj.type == "ARMATURE"
+        ]
         if not armatures:
             return
         armature = armatures[0]
@@ -560,15 +572,13 @@ class WM_OT_vrm_export_human_bones_assignment(Operator):
         if humanoid.all_required_bones_are_assigned():
             alert_box = layout.box()
             alert_box.label(
-                text="All Required VRM Human Bones have been assigned.",
-                icon="CHECKMARK",
+                text="All VRM Required Bones have been assigned.", icon="CHECKMARK"
             )
         else:
             alert_box = layout.box()
             alert_box.alert = True
             alert_box.label(
-                text="There are unassigned Required VRM Human Bones."
-                + " Please assign all.",
+                text="There are unassigned VRM Required Bones. Please assign all.",
                 icon="ERROR",
             )
         draw_vrm0_humanoid_operators_layout(armature, layout)
@@ -586,14 +596,13 @@ class WM_OT_vrm_export_human_bones_assignment(Operator):
         if human_bones.all_required_bones_are_assigned():
             alert_box = layout.box()
             alert_box.label(
-                text="All Required VRM Human Bones have been assigned.",
-                icon="CHECKMARK",
+                text="All VRM Required Bones have been assigned.", icon="CHECKMARK"
             )
         elif human_bones.allow_non_humanoid_rig:
             alert_box = layout.box()
             alert_box.label(
-                text="This armature will be exported but not as a humanoid."
-                + " It cannot have animations applied"
+                text="This armature will be exported but not as humanoid."
+                + " It can not have animations applied"
                 + " for humanoid avatars.",
                 icon="CHECKMARK",
             )
@@ -608,11 +617,11 @@ class WM_OT_vrm_export_human_bones_assignment(Operator):
             layout,
             VRM_OT_assign_vrm1_humanoid_human_bones_automatically,
             icon="ARMATURE_DATA",
-        ).armature_object_name = armature.name
+        ).armature_name = armature.name
 
         row = layout.split(factor=0.5)
-        draw_vrm1_humanoid_required_bones_layout(armature, row.column())
-        draw_vrm1_humanoid_optional_bones_layout(armature, row.column())
+        draw_vrm1_humanoid_required_bones_layout(human_bones, row.column())
+        draw_vrm1_humanoid_optional_bones_layout(human_bones, row.column())
 
         non_humanoid_export_column = layout.column()
         non_humanoid_export_column.prop(human_bones, "allow_non_humanoid_rig")
@@ -885,21 +894,4 @@ def draw_help_message(layout: UILayout) -> None:
         icon="URL",
         text="Open help in a Web Browser",
     )
-    open_op.url = pgettext("https://vrm-addon-for-blender.info/en-us/animation/")
-
-
-def collect_export_objects(
-    context: Context,
-    armature_object_name: str,
-    export_preferences: ExportPreferencesProtocol,
-) -> tuple[list[Object], list[Object]]:
-    export_objects = search.export_objects(
-        context,
-        armature_object_name,
-        export_invisibles=export_preferences.export_invisibles,
-        export_only_selections=export_preferences.export_only_selections,
-        export_lights=export_preferences.enable_advanced_preferences
-        and export_preferences.export_lights,
-    )
-    armature_objects = [obj for obj in export_objects if obj.type == "ARMATURE"]
-    return armature_objects, export_objects
+    open_op.url = pgettext("https://vrm-addon-for-blender.info/en/animation/")

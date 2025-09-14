@@ -1,5 +1,4 @@
 # SPDX-License-Identifier: MIT OR GPL-3.0-or-later
-import traceback
 from collections.abc import Set as AbstractSet
 from os import environ
 from pathlib import Path
@@ -20,7 +19,6 @@ from bpy.types import (
 from bpy_extras.io_utils import ImportHelper
 
 from ..common import ops, version
-from ..common.error_dialog import show_error_dialog
 from ..common.logger import get_logger
 from ..common.preferences import (
     ImportPreferencesProtocol,
@@ -35,9 +33,9 @@ from ..editor.ops import VRM_OT_open_url_in_web_browser, layout_operator
 from ..editor.property_group import CollectionPropertyProtocol, StringPropertyGroup
 from .abstract_base_vrm_importer import AbstractBaseVrmImporter, parse_vrm_json
 from .license_validation import LicenseConfirmationRequiredError
-from .uni_vrm_vrm_animation_importer import UniVrmVrmAnimationImporter
 from .vrm0_importer import Vrm0Importer
 from .vrm1_importer import Vrm1Importer
+from .vrm_animation_importer import VrmAnimationImporter
 
 logger = get_logger(__name__)
 
@@ -120,32 +118,23 @@ class IMPORT_SCENE_OT_vrm(Operator, ImportHelper):
     )
 
     def execute(self, context: Context) -> set[str]:
+        filepath = Path(self.filepath)
+        if not filepath.is_file():
+            return {"CANCELLED"}
+
+        if self.use_addon_preferences:
+            copy_import_preferences(source=get_preferences(context), destination=self)
+
+        license_error = None
         try:
-            filepath = Path(self.filepath)
-            if not filepath.is_file():
-                return {"CANCELLED"}
-
-            if self.use_addon_preferences:
-                copy_import_preferences(
-                    source=get_preferences(context), destination=self
-                )
-
-            license_error = None
-            try:
-                return import_vrm(
-                    filepath,
-                    self,
-                    context,
-                    license_validation=True,
-                )
-            except LicenseConfirmationRequiredError as e:
-                license_error = e  # Prevent traceback dump on another exception
-        except Exception:
-            show_error_dialog(
-                pgettext("Failed to import VRM."),
-                traceback.format_exc(),
+            return import_vrm(
+                filepath,
+                self,
+                context,
+                license_validation=True,
             )
-            raise
+        except LicenseConfirmationRequiredError as e:
+            license_error = e  # Prevent traceback dump on another exception
 
         logger.warning(license_error.description())
 
@@ -252,7 +241,7 @@ class VRM_PT_import_unsupported_blender_version_warning(Panel):
 class WM_OT_vrm_license_confirmation(Operator):
     bl_label = "VRM License Confirmation"
     bl_idname = "wm.vrm_license_warning"
-    bl_options: AbstractSet[str] = {"REGISTER"}
+    bl_options: AbstractSet[str] = {"REGISTER", "UNDO"}
 
     filepath: StringProperty()  # type: ignore[valid-type]
 
@@ -271,24 +260,17 @@ class WM_OT_vrm_license_confirmation(Operator):
     enable_mtoon_outline_preview: BoolProperty()  # type: ignore[valid-type]
 
     def execute(self, context: Context) -> set[str]:
-        try:
-            filepath = Path(self.filepath)
-            if not filepath.is_file():
-                return {"CANCELLED"}
-            if not self.import_anyway:
-                return {"CANCELLED"}
-            return import_vrm(
-                filepath,
-                self,
-                context,
-                license_validation=False,
-            )
-        except Exception:
-            show_error_dialog(
-                pgettext("Failed to import VRM."),
-                traceback.format_exc(),
-            )
-            raise
+        filepath = Path(self.filepath)
+        if not filepath.is_file():
+            return {"CANCELLED"}
+        if not self.import_anyway:
+            return {"CANCELLED"}
+        return import_vrm(
+            filepath,
+            self,
+            context,
+            license_validation=False,
+        )
 
     def invoke(self, context: Context, _event: Event) -> set[str]:
         return context.window_manager.invoke_props_dialog(self, width=600)
@@ -399,48 +381,41 @@ class IMPORT_SCENE_OT_vrma(Operator, ImportHelper):
     )
 
     def execute(self, context: Context) -> set[str]:
-        try:
-            errors = WM_OT_vrma_import_prerequisite.detect_errors(
-                context, self.armature_object_name
+        if WM_OT_vrma_import_prerequisite.detect_errors(
+            context, self.armature_object_name
+        ):
+            return ops.wm.vrma_import_prerequisite(
+                "INVOKE_DEFAULT",
+                armature_object_name=self.armature_object_name,
             )
-            if errors:
-                for error in errors:
-                    logger.error(error)
+
+        filepath = Path(self.filepath)
+        if not filepath.is_file():
+            return {"CANCELLED"}
+
+        armature = None
+        if self.armature_object_name:
+            armature = context.blend_data.objects.get(self.armature_object_name)
+            if not armature:
                 return {"CANCELLED"}
 
-            filepath = Path(self.filepath)
-            if not filepath.is_file():
+        if not armature:
+            armature = search.current_armature(context)
+
+        if not armature:
+            added = ops.icyp.make_basic_armature()
+            if added != {"FINISHED"}:
+                return added
+            armature = search.current_armature(context)
+            if not armature:
                 return {"CANCELLED"}
+            armature_data = armature.data
+            if not isinstance(armature_data, Armature):
+                return {"CANCELLED"}
+            ext = get_armature_extension(armature_data)
+            ext.spec_version = ext.SPEC_VERSION_VRM1
 
-            armature = None
-            if self.armature_object_name:
-                armature = context.blend_data.objects.get(self.armature_object_name)
-                if not armature:
-                    return {"CANCELLED"}
-
-            if not armature:
-                armature = search.current_armature(context)
-
-            if not armature:
-                added = ops.icyp.make_basic_armature()
-                if added != {"FINISHED"}:
-                    return added
-                armature = search.current_armature(context)
-                if not armature:
-                    return {"CANCELLED"}
-                armature_data = armature.data
-                if not isinstance(armature_data, Armature):
-                    return {"CANCELLED"}
-                ext = get_armature_extension(armature_data)
-                ext.spec_version = ext.SPEC_VERSION_VRM1
-
-            return UniVrmVrmAnimationImporter.execute(context, filepath, armature)
-        except Exception:
-            show_error_dialog(
-                pgettext("Failed to import VRM Animation."),
-                traceback.format_exc(),
-            )
-            raise
+        return VrmAnimationImporter.execute(context, filepath, armature)
 
     def invoke(self, context: Context, event: Event) -> set[str]:
         if WM_OT_vrma_import_prerequisite.detect_errors(
@@ -548,7 +523,7 @@ class WM_OT_vrma_import_prerequisite(Operator):
             icon="URL",
             text="Open help in a Web Browser",
         )
-        open_op.url = pgettext("https://vrm-addon-for-blender.info/en-us/animation/")
+        open_op.url = pgettext("https://vrm-addon-for-blender.info/en/animation/")
 
     if TYPE_CHECKING:
         # This code is auto generated.

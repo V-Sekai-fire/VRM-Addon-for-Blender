@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT OR GPL-3.0-or-later
 import math
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from sys import float_info
@@ -240,8 +240,8 @@ class ChainHorizontalMultipleChildren:
 def reset_root_to_human_bone_translation(
     pose: Pose, ext: VrmAddonArmatureExtensionPropertyGroup
 ) -> None:
-    # Reset positions from root bone to any Human bone
-    # No particular reason for not resetting all bones, just intuition
+    # ルートボーンからいずれかのHumanボーンまでの位置をリセット
+    # 全てのボーンをリセットしない理由は特に無くて勘
     bones: list[PoseBone] = [bone for bone in pose.bones if not bone.parent]
     while bones:
         bone = bones.pop()
@@ -523,10 +523,9 @@ class PoseBonePose:
     rotation_euler: Euler
     scale: Vector
     location: Vector
-    bone_select: bool
 
     @staticmethod
-    def save(pose: Pose) -> Mapping[str, "PoseBonePose"]:
+    def save(pose: Pose) -> dict[str, "PoseBonePose"]:
         return {
             bone.name: PoseBonePose(
                 matrix_basis=bone.matrix_basis.copy(),
@@ -541,7 +540,6 @@ class PoseBonePose:
                 rotation_euler=bone.rotation_euler.copy(),
                 scale=bone.scale.copy(),
                 location=bone.location.copy(),
-                bone_select=bone.bone.select,
             )
             for bone in pose.bones
         }
@@ -550,7 +548,7 @@ class PoseBonePose:
     def load(
         context: Context,
         pose: Pose,
-        bone_name_to_pose_bone_pose: Mapping[str, "PoseBonePose"],
+        bone_name_to_pose_bone_pose: dict[str, "PoseBonePose"],
     ) -> None:
         context.view_layer.update()
 
@@ -560,8 +558,8 @@ class PoseBonePose:
             pose_bone_pose = bone_name_to_pose_bone_pose.get(bone.name)
             if pose_bone_pose:
                 bone.matrix_basis = pose_bone_pose.matrix_basis.copy()
-                # Directly restoring bone.matrix seems more efficient, but doing so
-                # can cause problems when constraints are attached
+                # bone.matrixを直接復元したほうが効率的に思えるが、それをやると
+                # コンストレイントがついている場合に不具合が発生することがある
                 # https://github.com/saturday06/VRM-Addon-for-Blender/issues/671
                 bone.rotation_mode = pose_bone_pose.rotation_mode
                 bone.rotation_axis_angle = list(pose_bone_pose.rotation_axis_angle)
@@ -569,36 +567,9 @@ class PoseBonePose:
                 bone.rotation_euler = pose_bone_pose.rotation_euler.copy()
                 bone.scale = pose_bone_pose.scale.copy()
                 bone.location = pose_bone_pose.location.copy()
-                bone.bone.select = pose_bone_pose.bone_select
             bones.extend(bone.children)
 
         context.view_layer.update()
-
-
-def leave_setup_humanoid_t_pose(
-    context: Context,
-    armature: Object,
-    saved_pose_bone_pose: Mapping[str, PoseBonePose],
-    saved_pose_position: str,
-    *,
-    saved_vrm1_look_at_preview: bool,
-) -> None:
-    with save_workspace(context, armature):
-        bpy.ops.object.select_all(action="DESELECT")
-        bpy.ops.object.mode_set(mode="POSE")
-        PoseBonePose.load(context, armature.pose, saved_pose_bone_pose)
-        bpy.ops.object.mode_set(mode="OBJECT")
-
-        armature_data = armature.data
-        if not isinstance(armature_data, Armature):
-            return
-        armature_data.pose_position = saved_pose_position
-        ext = get_armature_extension(armature_data)
-        if (
-            ext.is_vrm1()
-            and ext.vrm1.look_at.enable_preview != saved_vrm1_look_at_preview
-        ):
-            ext.vrm1.look_at.enable_preview = saved_vrm1_look_at_preview
 
 
 @contextmanager
@@ -655,14 +626,10 @@ def setup_humanoid_t_pose(
 
         saved_pose_bone_pose = PoseBonePose.save(armature.pose)
 
-        for bone in armature.pose.bones:
-            bone.bone.select = False
-
         ext = get_armature_extension(armature_data)
         saved_vrm1_look_at_preview = ext.vrm1.look_at.enable_preview
         if ext.is_vrm1() and ext.vrm1.look_at.enable_preview:
-            # TODO: It would be helpful to warn in advance if this is
-            # reached during export
+            # TODO: エクスポート時にここに到達する場合は事前に警告をすると親切
             ext.vrm1.look_at.enable_preview = False
             if ext.vrm1.look_at.type == ext.vrm1.look_at.TYPE_BONE.identifier:
                 human_bones = ext.vrm1.humanoid.human_bones
@@ -678,7 +645,7 @@ def setup_humanoid_t_pose(
                     set_rotation_without_mode_change(right_eye_bone, Quaternion())
 
         if pose == humanoid.POSE_AUTO_POSE.identifier:
-            ops.vrm.make_estimated_humanoid_t_pose(armature_object_name=armature.name)
+            ops.vrm.make_estimated_humanoid_t_pose(armature_name=armature.name)
         elif pose == humanoid.POSE_CUSTOM_POSE.identifier:
             if action and action.name in context.blend_data.actions:
                 pose_marker_frame = 0
@@ -691,24 +658,26 @@ def setup_humanoid_t_pose(
                     action, evaluation_time=pose_marker_frame
                 )
             else:
-                # TODO: It would be helpful to warn in advance if this is
-                # reached during export
-                ops.vrm.make_estimated_humanoid_t_pose(
-                    armature_object_name=armature.name
-                )
+                # TODO: エクスポート時にここに到達する場合は事前に警告をすると親切
+                ops.vrm.make_estimated_humanoid_t_pose(armature_name=armature.name)
 
     context.view_layer.update()
 
     try:
         yield
-        # After yield, bpy native objects may be deleted or frames may advance
-        # making them invalid. Accessing them in this state can cause crashes,
-        # so be careful not to access potentially invalid native objects after yield
     finally:
-        leave_setup_humanoid_t_pose(
-            context,
-            armature,
-            saved_pose_bone_pose,
-            saved_pose_position,
-            saved_vrm1_look_at_preview=saved_vrm1_look_at_preview,
-        )
+        with save_workspace(context, armature):
+            bpy.ops.object.select_all(action="DESELECT")
+            bpy.ops.object.mode_set(mode="POSE")
+
+            PoseBonePose.load(context, armature.pose, saved_pose_bone_pose)
+
+            armature_data.pose_position = saved_pose_position
+            bpy.ops.object.mode_set(mode="OBJECT")
+
+            ext = get_armature_extension(armature_data)
+            if (
+                ext.is_vrm1()
+                and ext.vrm1.look_at.enable_preview != saved_vrm1_look_at_preview
+            ):
+                ext.vrm1.look_at.enable_preview = saved_vrm1_look_at_preview

@@ -202,7 +202,7 @@ def migrate(context: Context, vrm1: Vrm1PropertyGroup, armature: Object) -> None
         return
 
     human_bones = vrm1.humanoid.human_bones
-    human_bones.last_bone_names_str = ""
+    human_bones.last_bone_names.clear()
     Vrm1HumanBonesPropertyGroup.fixup_human_bones(armature)
     Vrm1HumanBonesPropertyGroup.update_all_node_candidates(context, armature_data.name)
 
@@ -211,7 +211,7 @@ def migrate(context: Context, vrm1: Vrm1PropertyGroup, armature: Object) -> None
         human_bone_name_to_human_bone = human_bones.human_bone_name_to_human_bone()
         if all(not b.node.bone_name for b in human_bone_name_to_human_bone.values()):
             ops.vrm.assign_vrm1_humanoid_human_bones_automatically(
-                armature_object_name=armature.name
+                armature_name=armature.name
             )
 
     if tuple(get_armature_extension(armature_data).addon_version) <= (2, 14, 10):
@@ -257,21 +257,13 @@ def migrate(context: Context, vrm1: Vrm1PropertyGroup, armature: Object) -> None
     migrate_pose(context, armature, armature_data)
     migrate_auto_pose(context, armature_data)
 
-    # Set a name for the expression preset.
-    # It's not necessary for management, but I want to set it because it's
-    # displayed in the animation keyframes.
+    # Expressionのプリセットに名前を設定する
+    # 管理上は無くてもよいが、アニメーションキーフレームに表示されるので設定しておきたい
     expressions = get_armature_extension(armature_data).vrm1.expressions
     preset_name_to_expression_dict = expressions.preset.name_to_expression_dict()
     for preset_name, preset_expression in preset_name_to_expression_dict.items():
         if preset_expression.name != preset_name:
             preset_expression.name = preset_name
-
-    if tuple(get_armature_extension(armature_data).addon_version) < (3, 9, 0):
-        for expression in expressions.preset.name_to_expression_dict().values():
-            for morph_target_bind in expression.morph_target_binds:
-                morph_target_bind.node.saved_mesh_object_name_to_restore = (
-                    morph_target_bind.node.mesh_object_name
-                )
 
     Vrm1HumanBonesPropertyGroup.update_all_node_candidates(
         context,

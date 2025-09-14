@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT OR GPL-3.0-or-later
 import math
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Optional, TypeVar
+from typing import TYPE_CHECKING, Optional
 
 import bpy
 from bpy.props import (
@@ -31,6 +31,7 @@ from .property_group import StringPropertyGroup, property_group_enum
 from .spring_bone1.property_group import SpringBone1SpringBonePropertyGroup
 from .vrm0.property_group import Vrm0HumanoidPropertyGroup, Vrm0PropertyGroup
 from .vrm1.property_group import Vrm1HumanBonesPropertyGroup, Vrm1PropertyGroup
+from .bmesh_encoding.property_group import BmeshEncodingPropertyGroup
 
 if TYPE_CHECKING:
     from .property_group import CollectionPropertyProtocol
@@ -375,6 +376,12 @@ class VrmAddonArmatureExtensionPropertyGroup(PropertyGroup):
         type=NodeConstraint1NodeConstraintPropertyGroup
     )
 
+    bmesh_encoding: PointerProperty(  # type: ignore[valid-type]
+        type=BmeshEncodingPropertyGroup
+    )
+
+    armature_data_name: StringProperty()  # type: ignore[valid-type]
+
     SPEC_VERSION_VRM0 = "0.0"
     SPEC_VERSION_VRM1 = "1.0"
     spec_version_items = (
@@ -434,6 +441,8 @@ class VrmAddonArmatureExtensionPropertyGroup(PropertyGroup):
         node_constraint1: (  # type: ignore[no-redef]
             NodeConstraint1NodeConstraintPropertyGroup
         )
+        bmesh_encoding: BmeshEncodingPropertyGroup  # type: ignore[no-redef]
+        armature_data_name: str  # type: ignore[no-redef]
         spec_version: str  # type: ignore[no-redef]
 
 
@@ -467,51 +476,57 @@ class VrmAddonNodeTreeExtensionPropertyGroup(PropertyGroup):
         addon_version: Sequence[int]  # type: ignore[no-redef]
 
 
-__Extension = TypeVar("__Extension")
-
-
-def get_vrm_addon_extension_or_raise(
-    obj: object, expected_type: type[__Extension]
-) -> __Extension:
-    extension = getattr(obj, "vrm_addon_extension", None)
-    if isinstance(extension, expected_type):
-        return extension
-
-    message = f"{extension} is not a {expected_type} but {type(extension)}"
-    raise TypeError(message)
-
-
 def get_material_extension(
     material: Material,
 ) -> VrmAddonMaterialExtensionPropertyGroup:
-    return get_vrm_addon_extension_or_raise(
-        material, VrmAddonMaterialExtensionPropertyGroup
-    )
+    extension = getattr(material, "vrm_addon_extension", None)
+    if not isinstance(extension, VrmAddonMaterialExtensionPropertyGroup):
+        raise TypeError
+    return extension
 
 
 def get_armature_extension(
     armature: Armature,
 ) -> VrmAddonArmatureExtensionPropertyGroup:
-    return get_vrm_addon_extension_or_raise(
-        armature, VrmAddonArmatureExtensionPropertyGroup
-    )
+    extension = getattr(armature, "vrm_addon_extension", None)
+    if not isinstance(extension, VrmAddonArmatureExtensionPropertyGroup):
+        raise TypeError
+    return extension
 
 
 def get_node_tree_extension(
     node_tree: NodeTree,
 ) -> VrmAddonNodeTreeExtensionPropertyGroup:
-    return get_vrm_addon_extension_or_raise(
-        node_tree, VrmAddonNodeTreeExtensionPropertyGroup
-    )
+    extension = getattr(node_tree, "vrm_addon_extension", None)
+    if not isinstance(extension, VrmAddonNodeTreeExtensionPropertyGroup):
+        raise TypeError
+    return extension
 
 
 def get_scene_extension(scene: Scene) -> VrmAddonSceneExtensionPropertyGroup:
-    return get_vrm_addon_extension_or_raise(scene, VrmAddonSceneExtensionPropertyGroup)
+    extension = getattr(scene, "vrm_addon_extension", None)
+    if not isinstance(extension, VrmAddonSceneExtensionPropertyGroup):
+        raise TypeError
+    return extension
 
 
 def get_bone_extension(bone: Bone) -> VrmAddonBoneExtensionPropertyGroup:
-    return get_vrm_addon_extension_or_raise(bone, VrmAddonBoneExtensionPropertyGroup)
+    extension = getattr(bone, "vrm_addon_extension", None)
+    if not isinstance(extension, VrmAddonBoneExtensionPropertyGroup):
+        raise TypeError
+    return extension
 
 
 def get_object_extension(obj: Object) -> VrmAddonObjectExtensionPropertyGroup:
-    return get_vrm_addon_extension_or_raise(obj, VrmAddonObjectExtensionPropertyGroup)
+    extension = getattr(obj, "vrm_addon_extension", None)
+    if not isinstance(extension, VrmAddonObjectExtensionPropertyGroup):
+        raise TypeError
+    return extension
+
+
+def get_bmesh_encoding_extension(
+    armature: Armature,
+) -> BmeshEncodingPropertyGroup:
+    """Get BMesh encoding extension from armature."""
+    armature_ext = get_armature_extension(armature)
+    return armature_ext.bmesh_encoding

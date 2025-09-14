@@ -33,7 +33,7 @@ class LicenseConfirmationRequiredError(Exception):
         super().__init__(self.description())
 
     def description(self) -> str:
-        return "\n".join(prop.description() for prop in self.props)
+        return "\n".join([prop.description() for prop in self.props])
 
     def license_confirmations(self) -> list[dict[str, str]]:
         return [
@@ -65,7 +65,7 @@ def validate_license_url(
         LicenseConfirmationRequiredProp(
             url_str,
             json_key,
-            pgettext("This VRM is not allowed to be edited. Please check its license"),
+            pgettext("Is this VRM allowed to Edit? CHECK IT LICENSE"),
         )
     )
 
@@ -151,9 +151,7 @@ def validate_vrm0_license(
             LicenseConfirmationRequiredProp(
                 None,
                 None,
-                pgettext(
-                    "This VRM is not allowed to be edited. Please check its license"
-                ),
+                pgettext("This VRM is not allowed to Edit. CHECK ITS LICENSE"),
             )
         )
 

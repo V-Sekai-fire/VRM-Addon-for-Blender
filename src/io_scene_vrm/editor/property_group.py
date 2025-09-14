@@ -1,24 +1,12 @@
 # SPDX-License-Identifier: MIT OR GPL-3.0-or-later
 import uuid
-import warnings
-from collections.abc import Iterator, Mapping, Sequence, ValuesView
+from collections.abc import Iterator, ValuesView
 from dataclasses import dataclass
-from enum import Enum
-from typing import (
-    TYPE_CHECKING,
-    ClassVar,
-    Final,
-    Optional,
-    Protocol,
-    TypeVar,
-    Union,
-    overload,
-)
+from typing import TYPE_CHECKING, Optional, Protocol, TypeVar, overload
 
 import bpy
-from bpy.app.translations import pgettext
 from bpy.props import FloatProperty, PointerProperty, StringProperty
-from bpy.types import Armature, Bone, Context, Material, Object, PropertyGroup, UILayout
+from bpy.types import Armature, Bone, Material, Object, PropertyGroup
 
 from ..common.logger import get_logger
 from ..common.vrm0 import human_bone as vrm0_human_bone
@@ -154,86 +142,62 @@ class FloatPropertyGroup(PropertyGroup):
 
 class MeshObjectPropertyGroup(PropertyGroup):
     def get_mesh_object_name(self) -> str:
-        bpy_object = self.bpy_object
-        if not bpy_object or not bpy_object.name or bpy_object.type != "MESH":
+        if (
+            not self.bpy_object
+            or not self.bpy_object.name
+            or self.bpy_object.type != "MESH"
+        ):
             return ""
-        return str(bpy_object.name)
+        return str(self.bpy_object.name)
 
     def set_mesh_object_name(self, value: object) -> None:
         context = bpy.context
 
         if (
             not isinstance(value, str)
-            or not (obj := context.blend_data.objects.get(value))
-            or obj.type != "MESH"
+            or value not in context.blend_data.objects
+            or context.blend_data.objects[value].type != "MESH"
         ):
-            if self.bpy_object:
-                self.bpy_object = None
+            self.bpy_object = None
             return
-
-        if self.bpy_object != obj:
-            self.bpy_object = obj
+        self.bpy_object = context.blend_data.objects[value]
 
     mesh_object_name: StringProperty(  # type: ignore[valid-type]
         get=get_mesh_object_name, set=set_mesh_object_name
     )
 
-    saved_mesh_object_name_to_restore: StringProperty()  # type: ignore[valid-type]
-
     def get_value(self) -> str:
-        message = (
-            "`MeshObjectPropertyGroup.value` is deprecated and will be removed in the"
-            " next major release. Please use `MeshObjectPropertyGroup.mesh_object_name`"
-            " instead."
+        logger.warning(
+            "MeshObjectPropertyGroup.value is deprecated."
+            " Use MeshObjectPropertyGroup.mesh_object_name instead."
         )
-        logger.warning(message)
-        warnings.warn(message, DeprecationWarning, stacklevel=5)
         return str(self.mesh_object_name)
 
     def set_value(self, value: str) -> None:
-        message = (
-            "`MeshObjectPropertyGroup.value` is deprecated and will be removed in the"
-            " next major release. Please use `MeshObjectPropertyGroup.mesh_object_name`"
-            " instead."
+        logger.warning(
+            "MeshObjectPropertyGroup.value is deprecated."
+            " Use MeshObjectPropertyGroup.mesh_object_name instead."
         )
-        logger.warning(message)
-        warnings.warn(message, DeprecationWarning, stacklevel=5)
         self.mesh_object_name = value
 
+    # "value" is deprecated. Use "mesh_object_name" instead
     value: StringProperty(  # type: ignore[valid-type]
         get=get_value,
         set=set_value,
     )
-    """`value` is deprecated and will be removed in the next
-    major release. Please use `mesh_object_name` instead.
-    """
 
     def poll_bpy_object(self, obj: object) -> bool:
         return isinstance(obj, Object) and obj.type == "MESH"
 
-    def update_bpy_object(self, _context: Context) -> None:
-        bpy_object = self.bpy_object
-        self.saved_mesh_object_name_to_restore = bpy_object.name if bpy_object else ""
-
     bpy_object: PointerProperty(  # type: ignore[valid-type]
         type=Object,
         poll=poll_bpy_object,
-        update=update_bpy_object,
     )
-
-    def restore_object_assignment(self, context: Context) -> None:
-        if self.bpy_object:
-            return
-        obj = context.blend_data.objects.get(self.saved_mesh_object_name_to_restore)
-        if not obj:
-            return
-        self.set_mesh_object_name(obj.name)
 
     if TYPE_CHECKING:
         # This code is auto generated.
         # To regenerate, run the `uv run tools/property_typing.py` command.
         mesh_object_name: str  # type: ignore[no-redef]
-        saved_mesh_object_name_to_restore: str  # type: ignore[no-redef]
         value: str  # type: ignore[no-redef]
         bpy_object: Optional[Object]  # type: ignore[no-redef]
 
@@ -249,576 +213,262 @@ class MaterialPropertyGroup(PropertyGroup):
         material: Optional[Material]  # type: ignore[no-redef]
 
 
-class BonePropertyGroupType(Enum):
-    VRM0_FIRST_PERSON = 1
-    VRM0_HUMAN = 2
-    VRM0_COLLIDER_GROUP = 3
-    VRM0_BONE_GROUP_CENTER = 4
-    VRM0_BONE_GROUP = 5
-    VRM1_HUMAN = 6
-    SPRING_BONE1_COLLIDER = 7
-    SPRING_BONE1_SPRING_CENTER = 8
-    SPRING_BONE1_SPRING_JOINT = 9
-
-    @staticmethod
-    def is_vrm0(bone_property_group_type: "BonePropertyGroupType") -> bool:
-        return bone_property_group_type in {
-            BonePropertyGroupType.VRM0_FIRST_PERSON,
-            BonePropertyGroupType.VRM0_HUMAN,
-            BonePropertyGroupType.VRM0_COLLIDER_GROUP,
-            BonePropertyGroupType.VRM0_BONE_GROUP_CENTER,
-            BonePropertyGroupType.VRM0_BONE_GROUP,
-        }
-
-    @staticmethod
-    def is_vrm1(bone_property_group_type: "BonePropertyGroupType") -> bool:
-        return bone_property_group_type in {
-            BonePropertyGroupType.VRM1_HUMAN,
-            BonePropertyGroupType.SPRING_BONE1_COLLIDER,
-            BonePropertyGroupType.SPRING_BONE1_SPRING_CENTER,
-            BonePropertyGroupType.SPRING_BONE1_SPRING_JOINT,
-        }
-
-
 class BonePropertyGroup(PropertyGroup):
     @staticmethod
     def get_all_bone_property_groups(
-        armature: Union[Object, Armature],
-    ) -> Iterator[tuple["BonePropertyGroup", BonePropertyGroupType]]:
-        """Return (bone: BonePropertyGroup, is_vrm0: bool, is_vrm1: bool)."""
+        armature: Object,
+    ) -> Iterator["BonePropertyGroup"]:
         from .extension import get_armature_extension
 
-        if isinstance(armature, Object):
-            armature_data = armature.data
-            if not isinstance(armature_data, Armature):
-                return
-        else:
-            armature_data = armature
-
+        armature_data = armature.data
+        if not isinstance(armature_data, Armature):
+            return
         ext = get_armature_extension(armature_data)
-        yield (
-            ext.vrm0.first_person.first_person_bone,
-            BonePropertyGroupType.VRM0_FIRST_PERSON,
-        )
+        yield ext.vrm0.first_person.first_person_bone
         for human_bone in ext.vrm0.humanoid.human_bones:
-            yield human_bone.node, BonePropertyGroupType.VRM0_HUMAN
+            yield human_bone.node
         for collider_group in ext.vrm0.secondary_animation.collider_groups:
-            yield collider_group.node, BonePropertyGroupType.VRM0_COLLIDER_GROUP
+            yield collider_group.node
         for bone_group in ext.vrm0.secondary_animation.bone_groups:
-            yield bone_group.center, BonePropertyGroupType.VRM0_BONE_GROUP_CENTER
-            yield from (
-                (bone, BonePropertyGroupType.VRM0_BONE_GROUP)
-                for bone in bone_group.bones
-            )
+            yield bone_group.center
+            yield from bone_group.bones
         for (
             human_bone
         ) in ext.vrm1.humanoid.human_bones.human_bone_name_to_human_bone().values():
-            yield human_bone.node, BonePropertyGroupType.VRM1_HUMAN
+            yield human_bone.node
         for collider in ext.spring_bone1.colliders:
-            yield collider.node, BonePropertyGroupType.SPRING_BONE1_COLLIDER
+            yield collider.node
         for spring in ext.spring_bone1.springs:
-            yield spring.center, BonePropertyGroupType.SPRING_BONE1_SPRING_CENTER
+            yield spring.center
             for joint in spring.joints:
-                yield joint.node, BonePropertyGroupType.SPRING_BONE1_SPRING_JOINT
+                yield joint.node
 
     @staticmethod
     def find_bone_candidates(
         armature_data: Armature,
         target: HumanBoneSpecification,
-        bpy_bone_name_to_human_bone_specification: Mapping[str, HumanBoneSpecification],
-        error_bpy_bone_names: Sequence[str],
-        diagnostics_layout: Optional[UILayout] = None,
+        bpy_bone_name_to_human_bone_specification: dict[str, HumanBoneSpecification],
     ) -> set[str]:
         bones = armature_data.bones
-        human_bone_name_to_bpy_bone_name = {
-            value.name: key
-            for key, value in bpy_bone_name_to_human_bone_specification.items()
-        }
+        root_bones = [bone for bone in bones.values() if not bone.parent]
+        result: set[str] = set(bones.keys())
+        remove_bones_tree: set[Bone] = set()
 
-        search_conditions: list[str] = []
-
-        # If the target's ancestor has a Human Bone assignment, use that as the
-        # search start bone
-        searching_bones: Optional[list[Bone]] = None
-        ancestor: Optional[HumanBoneSpecification] = target.parent()
-        while ancestor:
-            ancestor_bpy_bone_name = human_bone_name_to_bpy_bone_name.get(ancestor.name)
-            if not ancestor_bpy_bone_name or not (
-                ancestor_bpy_bone := bones.get(ancestor_bpy_bone_name)
-            ):
-                # If there's no Human Bone assignment, traverse to the parent
-                ancestor = ancestor.parent()
+        for (
+            bpy_bone_name,
+            human_bone_specification,
+        ) in bpy_bone_name_to_human_bone_specification.items():
+            if human_bone_specification == target:
                 continue
 
-            if ancestor_bpy_bone.name in error_bpy_bone_names:
-                # If there's an error in the Human Bone assignment, return empty result
-                if diagnostics_layout:
-                    diagnostics_message = pgettext(
-                        'The bone assigned to the VRM Human Bone "{human_bone}" must'
-                        + " be descendants of the bones assigned \nto the VRM human"
-                        + ' bone "{parent_human_bone}". However, it cannot retrieve'
-                        + " bone candidates because there\nis an error in the"
-                        + ' assignment of the VRM Human Bone "{parent_human_bone}".'
-                        + " Please resolve the error in the\nassignment of the VRM"
-                        + ' Human Bone "{parent_human_bone}" first.'
-                    ).format(
-                        human_bone=target.title,
-                        parent_human_bone=ancestor.title,
-                    )
-                    diagnostics_column = diagnostics_layout.column(align=True)
-                    for i, line in enumerate(diagnostics_message.splitlines()):
-                        diagnostics_column.label(
-                            text=line,
-                            translate=False,
-                            icon="ERROR" if i == 0 else "BLANK1",
-                        )
-                return set()
-
-            # Use the child bones of the found ancestor bone as the search start bones
-            searching_bones = list(ancestor_bpy_bone.children)
-            if diagnostics_layout:
-                search_conditions.append(
-                    pgettext(
-                        'Being a descendant of the bone "{bpy_bone}" assigned'
-                        + ' to the VRM Human Bone "{human_bone}"'
-                    ).format(
-                        human_bone=ancestor.title,
-                        bpy_bone=ancestor_bpy_bone_name,
-                    )
-                )
-            break
-
-        root_bones: Final[Sequence[Bone]] = [
-            bone for bone in bones.values() if not bone.parent
-        ]
-
-        # If no ancestor bone is found, use the root bone as the search start bone
-        if searching_bones is None and len(root_bones) > 1:
-            # If there are multiple root bones,
-            # select the root bone of the already assigned bone
-            human_bone_specification = None
-            for (
-                bpy_bone_name,
-                human_bone_specification,
-            ) in bpy_bone_name_to_human_bone_specification.items():
-                if not bpy_bone_name:
-                    continue
-                if bpy_bone_name in error_bpy_bone_names:
-                    continue
-                bpy_bone = bones.get(bpy_bone_name)
-                if not bpy_bone:
-                    continue
-
-                main_root_bone: Optional[Bone] = None
-                parent: Optional[Bone] = bpy_bone
-                while parent:
-                    main_root_bone = parent
-                    parent = parent.parent
-                if not main_root_bone:
-                    continue
-
-                searching_bones = [main_root_bone]
-                if diagnostics_layout:
-                    search_conditions.append(
-                        pgettext(
-                            'Sharing the root bone with the bone "{bpy_bone}" assigned'
-                            + ' to the VRM Human Bone "{human_bone}"'
-                        ).format(
-                            human_bone=human_bone_specification.title,
-                            bpy_bone=bpy_bone_name,
-                        )
-                    )
-                break
-        if searching_bones is None:
-            searching_bones = list(root_bones)
-
-        # Bone candidates
-        bone_candidates: set[Bone] = set(searching_bones)
-
-        # First, register all descendant bones as candidates
-        filling_bones = searching_bones.copy()
-        while filling_bones:
-            filling_bone = filling_bones.pop()
-            bone_candidates.update(filling_bone.children)
-            filling_bones.extend(filling_bone.children)
-
-        removing_bone_tree = set[Bone]()
-
-        # Traverse descendant bones and when we encounter an already assigned bone,
-        # examine its relationship and exclude unnecessary candidates.
-        while searching_bones:
-            searching_bone = searching_bones.pop()
-            human_bone_specification = bpy_bone_name_to_human_bone_specification.get(
-                searching_bone.name
-            )
-
-            # If not assigned to a Human Bone or if it's the target bone,
-            # recursively traverse child bones
-            if (
-                human_bone_specification is None
-                or human_bone_specification == target
-                or searching_bone.name in error_bpy_bone_names
-            ):
-                searching_bones.extend(searching_bone.children)
+            parent = bones.get(bpy_bone_name)
+            if not parent:
                 continue
 
             if human_bone_specification.is_ancestor_of(target):
-                # If an ancestor bone has an assignment
-                # This case shouldn't exist since we start from the nearest
-                # ancestor bone
-                continue
+                remove_ancestors = True
+                remove_ancestor_branches = True
+            elif target.is_ancestor_of(human_bone_specification):
+                remove_bones_tree.add(parent)
+                remove_ancestors = False
+                remove_ancestor_branches = True
+            else:
+                remove_bones_tree.add(parent)
+                remove_ancestors = True
+                remove_ancestor_branches = False
 
-            if target.is_ancestor_of(human_bone_specification):
-                # If a descendant bone has an assignment:
-                # - Exclude that bone and its descendants
-                # - Exclude branches when traversing from that bone to the root bone
-                removing_bone_tree.add(searching_bone)
-
-                parent = searching_bone
-                while parent:
-                    grand_parent = parent.parent
-                    if grand_parent is None:
-                        # If parent is a root bone,
-                        # exclude other root bones except parent
-                        removing_bone_tree.update(
+            while True:
+                if remove_ancestors and parent.name in result:
+                    result.remove(parent.name)
+                grand_parent = parent.parent
+                if not grand_parent:
+                    if remove_ancestor_branches:
+                        remove_bones_tree.update(
                             root_bone for root_bone in root_bones if root_bone != parent
                         )
-                        break
-                    # Exclude sibling bones of parent
-                    removing_bone_tree.update(
-                        parent_sibling
-                        for parent_sibling in grand_parent.children
-                        if parent_sibling != parent
-                    )
-                    parent = grand_parent
+                    break
 
-                if diagnostics_layout:
-                    search_conditions.append(
-                        pgettext(
-                            'Being an ancestor of the bone "{bpy_bone}" assigned'
-                            + ' to the VRM Human Bone "{human_bone}"'
-                        ).format(
-                            human_bone=human_bone_specification.title,
-                            bpy_bone=searching_bone.name,
-                        )
-                    )
-            else:
-                # If a bone that is neither ancestor nor descendant has an assignment:
-                # - Exclude that bone and its descendants
-                # - Exclude that bone and its ancestors
-                removing_bone_tree.add(searching_bone)
+                if remove_ancestor_branches:
+                    for grand_parent_child in grand_parent.children:
+                        if grand_parent_child != parent:
+                            remove_bones_tree.add(grand_parent_child)
 
-                parent = searching_bone
-                while parent:
-                    bone_candidates.discard(parent)
-                    parent = parent.parent
-                if diagnostics_layout:
-                    search_conditions.append(
-                        pgettext(
-                            'Not being an ancestor of the bone "{bpy_bone}" assigned'
-                            + ' to the VRM Human Bone "{human_bone}"'
-                        ).format(
-                            human_bone=human_bone_specification.title,
-                            bpy_bone=searching_bone.name,
-                        )
-                    )
+                parent = grand_parent
 
-        bone_candidates.difference_update(removing_bone_tree)
-        while removing_bone_tree:
-            removing_bone = removing_bone_tree.pop()
-            bone_candidates.difference_update(removing_bone.children)
-            removing_bone_tree.update(removing_bone.children)
+        while remove_bones_tree:
+            child = remove_bones_tree.pop()
+            if child.name in result:
+                result.remove(child.name)
+            remove_bones_tree.update(child.children)
 
-        if diagnostics_layout and search_conditions:
-            diagnostics_layout.label(
-                text=pgettext(
-                    "Bones that meet all of the following conditions will be "
-                    + "candidates for assignment:"
-                ),
-                translate=False,
-                icon="INFO",
-            )
-            for search_condition in sorted(search_conditions):
-                diagnostics_layout.label(
-                    text=search_condition,
-                    translate=False,
-                    icon="DOT",
-                )
-
-        return {bone_cancidate.name for bone_cancidate in bone_candidates}
-
-    armature_data_name_and_bone_uuid_to_bone_name_cache: ClassVar[
-        dict[tuple[str, str], str]
-    ] = {}
+        return result
 
     def get_bone_name(self) -> str:
         from .extension import get_bone_extension
 
+        context = bpy.context
+
         if not self.bone_uuid:
             return ""
+        if not self.armature_data_name:
+            return ""
+        armature_data = context.blend_data.armatures.get(self.armature_data_name)
+        if not armature_data:
+            return ""
 
-        armature_data = self.find_armature()
-
-        # Use cache to speed up this function since profiling showed it was slow
-        cache_key = (armature_data.name, self.bone_uuid)
-        cached_bone_name = self.armature_data_name_and_bone_uuid_to_bone_name_cache.get(
-            cache_key
-        )
-        if cached_bone_name is not None:
-            if (
-                cached_bone := armature_data.bones.get(cached_bone_name)
-            ) and get_bone_extension(cached_bone).uuid == self.bone_uuid:
-                return cached_bone_name
-            # If there's even one old value in the cache, clear everything for safety
-            self.armature_data_name_and_bone_uuid_to_bone_name_cache.clear()
-
+        # TODO: Optimization
         for bone in armature_data.bones:
             if get_bone_extension(bone).uuid == self.bone_uuid:
-                self.armature_data_name_and_bone_uuid_to_bone_name_cache[cache_key] = (
-                    bone.name
-                )
                 return bone.name
 
         return ""
 
-    def find_armature(self) -> Armature:
-        id_data = self.id_data
-        if isinstance(id_data, Armature):
-            return id_data
-
-        message = (
-            f"{type(self)}/{self}.id_data is not a {Armature}"
-            + f" but {type(id_data)}/{id_data}"
+    def set_bone_name_and_refresh_node_candidates(self, value: object) -> None:
+        self.set_bone_name(
+            None if value is None else str(value), refresh_node_candidates=True
         )
-        raise AssertionError(message)
 
-    def get_bone_property_group_type(self) -> BonePropertyGroupType:
-        armature_data = self.find_armature()
-        for (
-            bone_property_group,
-            bone_property_group_type,
-        ) in self.get_all_bone_property_groups(armature_data):
-            if bone_property_group == self:
-                return bone_property_group_type
-
-        message = (
-            f"{type(self)}/{self} is not associated with "
-            + "BonePropertyGroupType.get_all_bone_property_groups"
-        )
-        raise AssertionError(message)
-
-    def set_bone_name(self, value: str) -> None:
+    def set_bone_name(
+        self, value: Optional[str], *, refresh_node_candidates: bool = False
+    ) -> None:
         from .extension import get_armature_extension, get_bone_extension
 
         context = bpy.context
 
-        armature_data = self.find_armature()
-        armature_objects = [
-            obj for obj in context.blend_data.objects if obj.data == armature_data
-        ]
-        bone_property_group_type = self.get_bone_property_group_type()
+        armature: Optional[Object] = None
 
-        # Assign UUIDs and regenerate it if duplication exist
+        # Reassign self.armature_data_name in case of armature duplication.
+        self.search_one_time_uuid = uuid.uuid4().hex
+        for found_armature in context.blend_data.objects:
+            if found_armature.type != "ARMATURE":
+                continue
+            if all(
+                bone_property_group.search_one_time_uuid != self.search_one_time_uuid
+                for bone_property_group in (
+                    BonePropertyGroup.get_all_bone_property_groups(found_armature)
+                )
+            ):
+                continue
+            armature = found_armature
+            break
+        if not armature:
+            self.armature_data_name = ""
+            self.bone_uuid = ""
+            return
+
+        armature_data = armature.data
+        if not isinstance(armature_data, Armature):
+            self.armature_data_name = ""
+            self.bone_uuid = ""
+            return
+
+        self.armature_data_name = armature_data.name
+
+        # Reassign UUIDs if duplicate UUIDs exist in case of bone duplication.
         found_uuids: set[str] = set()
         for bone in armature_data.bones:
-            bone_extension = get_bone_extension(bone)
-            found_uuid = bone_extension.uuid
+            found_uuid = get_bone_extension(bone).uuid
             if not found_uuid or found_uuid in found_uuids:
-                bone_extension.uuid = uuid.uuid4().hex
-                self.armature_data_name_and_bone_uuid_to_bone_name_cache.clear()
-            found_uuids.add(bone_extension.uuid)
+                get_bone_extension(bone).uuid = uuid.uuid4().hex
+            found_uuids.add(get_bone_extension(bone).uuid)
 
-        if not value or not (bone := armature_data.bones.get(value)):
+        if not value or value not in armature_data.bones:
             if not self.bone_uuid:
-                # Not changed
                 return
             self.bone_uuid = ""
-        elif self.bone_uuid and self.bone_uuid == get_bone_extension(bone).uuid:
-            # Not changed
+        elif (
+            self.bone_uuid
+            and self.bone_uuid == get_bone_extension(armature_data.bones[value]).uuid
+        ):
             return
         else:
+            bone = armature_data.bones[value]
             self.bone_uuid = get_bone_extension(bone).uuid
 
         ext = get_armature_extension(armature_data)
+        for collider_group in ext.vrm0.secondary_animation.collider_groups:
+            collider_group.refresh(armature)
 
-        if bone_property_group_type in [
-            BonePropertyGroupType.VRM0_COLLIDER_GROUP,
-            BonePropertyGroupType.VRM0_BONE_GROUP,
-        ]:
-            for collider_group in ext.vrm0.secondary_animation.collider_groups:
-                for armature_object in armature_objects:
-                    collider_group.refresh(armature_object)
+        if not refresh_node_candidates:
+            return
 
-        if bone_property_group_type == BonePropertyGroupType.SPRING_BONE1_COLLIDER:
-            for collider in ext.spring_bone1.colliders:
-                for armature_object in armature_objects:
-                    collider.reset_bpy_object(context, armature_object)
-
-        if (
-            ext.is_vrm0()
-            and bone_property_group_type == BonePropertyGroupType.VRM0_HUMAN
-        ):
-            self.update_all_vrm0_node_candidates(armature_data)
-        if (
-            ext.is_vrm1()
-            and bone_property_group_type == BonePropertyGroupType.VRM1_HUMAN
-        ):
-            self.update_all_vrm1_node_candidates(armature_data)
-
-    @staticmethod
-    def update_all_vrm0_node_candidates(armature_data: Armature) -> None:
-        from .extension import get_armature_extension
-
-        ext = get_armature_extension(armature_data)
-
-        bpy_bone_name_to_human_bone_specification: dict[
+        vrm0_bpy_bone_name_to_human_bone_specification: dict[
             str, vrm0_human_bone.HumanBoneSpecification
-        ] = {}
+        ] = {
+            human_bone.node.bone_name: vrm0_human_bone.HumanBoneSpecifications.get(
+                vrm0_human_bone.HumanBoneName(human_bone.bone)
+            )
+            for human_bone in ext.vrm0.humanoid.human_bones
+            if human_bone.node.bone_name
+            and vrm0_human_bone.HumanBoneName.from_str(human_bone.bone) is not None
+        }
+
         for human_bone in ext.vrm0.humanoid.human_bones:
-            if not human_bone.node.bone_name:
-                continue
-            human_bone_name = vrm0_human_bone.HumanBoneName.from_str(human_bone.bone)
-            if human_bone_name is None:
-                continue
-            bpy_bone_name_to_human_bone_specification[human_bone.node.bone_name] = (
-                vrm0_human_bone.HumanBoneSpecifications.get(human_bone_name)
+            human_bone.update_node_candidates(
+                armature_data,
+                vrm0_bpy_bone_name_to_human_bone_specification,
             )
-
-        # Set from parent to child since child nodes will always have errors
-        # if parent node has errors
-        traversing_human_bone_specifications = [
-            vrm0_human_bone.HumanBoneSpecifications.HIPS
-        ]
-        error_bpy_bone_names = []
-        node_candidates_updated = True
-        while traversing_human_bone_specifications:
-            traversing_human_bone_specification = (
-                traversing_human_bone_specifications.pop()
-            )
-
-            if node_candidates_updated:
-                error_bpy_bone_names = [
-                    error_human_bone.node.bone_name
-                    for error_human_bone in ext.vrm0.humanoid.human_bones
-                    if error_human_bone.node.bone_name
-                    and error_human_bone.node.bone_name
-                    not in error_human_bone.node_candidates
-                ]
-
-            human_bone = next(
-                (
-                    human_bone
-                    for human_bone in ext.vrm0.humanoid.human_bones
-                    if vrm0_human_bone.HumanBoneName.from_str(human_bone.bone)
-                    == traversing_human_bone_specification.name
-                ),
-                None,
-            )
-            if human_bone:
-                node_candidates_updated = human_bone.update_node_candidates(
-                    armature_data,
-                    bpy_bone_name_to_human_bone_specification,
-                    error_bpy_bone_names,
-                )
-
-            traversing_human_bone_specifications.extend(
-                traversing_human_bone_specification.children()
-            )
-
-    @staticmethod
-    def update_all_vrm1_node_candidates(armature_data: Armature) -> None:
-        from .extension import get_armature_extension
-
-        ext = get_armature_extension(armature_data)
 
         human_bone_name_to_human_bone = (
             ext.vrm1.humanoid.human_bones.human_bone_name_to_human_bone()
         )
-        bpy_bone_name_to_human_bone_specification: dict[
+        vrm1_bpy_bone_name_to_human_bone_specification: dict[
             str, vrm1_human_bone.HumanBoneSpecification
-        ] = {}
-        for human_bone_name, human_bone in human_bone_name_to_human_bone.items():
-            if not human_bone.node.bone_name:
-                continue
-            bpy_bone_name_to_human_bone_specification[human_bone.node.bone_name] = (
-                vrm1_human_bone.HumanBoneSpecifications.get(human_bone_name)
+        ] = {
+            human_bone.node.bone_name: vrm1_human_bone.HumanBoneSpecifications.get(
+                human_bone_name
             )
+            for human_bone_name, human_bone in human_bone_name_to_human_bone.items()
+            if human_bone.node.bone_name
+        }
 
-        # Set from parent to child since child nodes will always have errors
-        # if parent node has errors
-        traversing_human_bone_specifications = [
-            vrm1_human_bone.HumanBoneSpecifications.HIPS
-        ]
-        error_bpy_bone_names = []
-        node_candidates_updated = True
-        while traversing_human_bone_specifications:
-            traversing_human_bone_specification = (
-                traversing_human_bone_specifications.pop()
-            )
-
-            if node_candidates_updated:
-                error_bpy_bone_names = [
-                    error_human_bone.node.bone_name
-                    for error_human_bone in human_bone_name_to_human_bone.values()
-                    if error_human_bone.node.bone_name
-                    and error_human_bone.node.bone_name
-                    not in error_human_bone.node_candidates
-                ]
-
-            human_bone = human_bone_name_to_human_bone[
-                traversing_human_bone_specification.name
-            ]
-            node_candidates_updated = human_bone.update_node_candidates(
+        for (
+            human_bone_name,
+            human_bone,
+        ) in human_bone_name_to_human_bone.items():
+            human_bone.update_node_candidates(
                 armature_data,
-                traversing_human_bone_specification,
-                bpy_bone_name_to_human_bone_specification,
-                error_bpy_bone_names,
-            )
-
-            traversing_human_bone_specifications.extend(
-                traversing_human_bone_specification.children()
+                vrm1_human_bone.HumanBoneSpecifications.get(human_bone_name),
+                vrm1_bpy_bone_name_to_human_bone_specification,
             )
 
     bone_name: StringProperty(  # type: ignore[valid-type]
         name="Bone",
         get=get_bone_name,
-        set=set_bone_name,
+        set=set_bone_name_and_refresh_node_candidates,
     )
 
     def get_value(self) -> str:
-        message = (
-            "`BonePropertyGroup.value` is deprecated and will be removed in the"
-            " next major release. Please use `BonePropertyGroup.bone_name` instead."
+        logger.warning(
+            "BonePropertyGroup.value is deprecated."
+            " Use BonePropertyGroup.bone_name instead."
         )
-        logger.warning(message)
-        warnings.warn(message, DeprecationWarning, stacklevel=5)
         return str(self.bone_name)
 
     def set_value(self, value: str) -> None:
-        message = (
-            "`BonePropertyGroup.value` is deprecated and will be removed in the"
-            " next major release. Please use `BonePropertyGroup.bone_name` instead."
+        logger.warning(
+            "BonePropertyGroup.value is deprecated."
+            " Use BonePropertyGroup.bone_name instead."
         )
-        logger.warning(message)
-        warnings.warn(message, DeprecationWarning, stacklevel=5)
         self.bone_name = value
 
+    # "value" is deprecated. Use "bone_name" instead
     value: StringProperty(  # type: ignore[valid-type]
         name="Bone",
         get=get_value,
         set=set_value,
     )
-    """`value` is deprecated and will be removed in the next major
-    release. Please use `bone_name` instead."
-    """
-
     bone_uuid: StringProperty()  # type: ignore[valid-type]
+    armature_data_name: StringProperty()  # type: ignore[valid-type]
+    search_one_time_uuid: StringProperty()  # type: ignore[valid-type]
     if TYPE_CHECKING:
         # This code is auto generated.
         # To regenerate, run the `uv run tools/property_typing.py` command.
         bone_name: str  # type: ignore[no-redef]
         value: str  # type: ignore[no-redef]
         bone_uuid: str  # type: ignore[no-redef]
+        armature_data_name: str  # type: ignore[no-redef]
+        search_one_time_uuid: str  # type: ignore[no-redef]
 
 
 T_co = TypeVar("T_co", covariant=True)
@@ -835,12 +485,12 @@ class CollectionPropertyProtocol(Protocol[T_co]):
     def clear(self) -> None: ...  # TODO: undocumented
 
     @overload
-    def __getitem__(self, index: int) -> T_co: ...  # TODO: undocumented
-
-    @overload
     def __getitem__(
         self, index: "slice[Optional[int], Optional[int], Optional[int]]"
     ) -> tuple[T_co, ...]: ...  # TODO: undocumented
+
+    @overload
+    def __getitem__(self, index: int) -> T_co: ...  # TODO: undocumented
 
     def remove(self, index: int) -> None: ...  # TODO: undocumented
 

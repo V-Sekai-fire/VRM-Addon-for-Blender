@@ -168,12 +168,7 @@ class Vrm0Importer(AbstractBaseVrmImporter):
     def load_materials(self, progress: PartialProgress) -> None:
         shader_to_assignment_method = {
             "VRM/MToon": self.assign_mtoon0_property,
-            "VRM/UnlitTexture": self.assign_unlit_texture_property,
-            "VRM/UnlitCutout": self.assign_unlit_cutout_property,
-            "VRM/UnlitTransparent": self.assign_unlit_transparent_property,
-            "VRM/UnlitTransparentZWrite": (
-                self.assign_unlit_transparent_z_write_property
-            ),
+            "VRM/UnlitTransparentZWrite": self.assign_transparent_z_write_property,
         }
 
         material_dicts = self.parse_result.json_dict.get("materials")
@@ -461,8 +456,8 @@ class Vrm0Importer(AbstractBaseVrmImporter):
         centimeter_to_meter = 0.01
         one_hundredth = 0.01
 
-        outline_width_mode = round(
-            material_property.float_properties.get("_OutlineWidthMode", 0)
+        outline_width_mode = int(
+            round(material_property.float_properties.get("_OutlineWidthMode", 0))
         )
 
         outline_width = material_property.float_properties.get("_OutlineWidth")
@@ -564,16 +559,16 @@ class Vrm0Importer(AbstractBaseVrmImporter):
             "_ShadingGradeRate", 0.5
         )
 
-        render_queue = material_property.render_queue
-        if render_queue is not None:
-            gltf.mtoon0_render_queue = render_queue
+        if material_property.render_queue is not None:
+            gltf.mtoon0_render_queue = material_property.render_queue
 
-    def assign_unlit_common_property(
+    def assign_transparent_z_write_property(
         self,
         material: Material,
         material_property: MaterialProperty,
     ) -> None:
         gltf = get_material_extension(material).mtoon1
+        gltf.enabled = True
         mtoon = gltf.extensions.vrmc_materials_mtoon
 
         main_texture_index = material_property.texture_properties.get("_MainTex")
@@ -588,89 +583,26 @@ class Vrm0Importer(AbstractBaseVrmImporter):
                     image_index = texture_dict.get("source")
                     if isinstance(image_index, int):
                         main_texture_image = self.images.get(image_index)
-
-        (texture_offset_u, texture_offset_v, texture_scale_u, texture_scale_v) = (
-            convert.float4_or(
-                material_property.vector_properties.get("_MainTex"),
-                (0.0, 0.0, 1.0, 1.0),
-            )
-        )
         if main_texture_image:
-            for texture in [
-                gltf.pbr_metallic_roughness.base_color_texture,
-                gltf.emissive_texture,
-                mtoon.shade_multiply_texture,
-            ]:
-                texture.index.source = main_texture_image
-                khr_texture_transform = texture.extensions.khr_texture_transform
-                khr_texture_transform.offset = (texture_offset_u, texture_offset_v)
-                khr_texture_transform.scale = (texture_scale_u, texture_scale_v)
+            gltf.pbr_metallic_roughness.base_color_texture.index.source = (
+                main_texture_image
+            )
+            gltf.emissive_texture.index.source = main_texture_image
+            mtoon.shade_multiply_texture.index.source = main_texture_image
 
         gltf.pbr_metallic_roughness.base_color_factor = (0, 0, 0, 1)
         gltf.emissive_factor = (1, 1, 1)
 
+        gltf.alpha_mode = Mtoon1MaterialPropertyGroup.ALPHA_MODE_BLEND.identifier
+        gltf.alpha_cutoff = 0.5
         gltf.double_sided = False
+        mtoon.transparent_with_z_write = True
         mtoon.shade_color_factor = (0, 0, 0)
         mtoon.shading_toony_factor = 0.95
         mtoon.shading_shift_factor = -0.05
         mtoon.rim_lighting_mix_factor = 1
         mtoon.parametric_rim_fresnel_power_factor = 5
         mtoon.parametric_rim_lift_factor = 0
-
-        render_queue = material_property.render_queue
-        if render_queue is not None:
-            gltf.mtoon0_render_queue = render_queue
-
-    def assign_unlit_texture_property(
-        self,
-        material: Material,
-        material_property: MaterialProperty,
-    ) -> None:
-        gltf = get_material_extension(material).mtoon1
-        gltf.enabled = True
-        gltf.alpha_mode = Mtoon1MaterialPropertyGroup.ALPHA_MODE_OPAQUE.identifier
-
-        self.assign_unlit_common_property(material, material_property)
-
-    def assign_unlit_cutout_property(
-        self,
-        material: Material,
-        material_property: MaterialProperty,
-    ) -> None:
-        gltf = get_material_extension(material).mtoon1
-        gltf.enabled = True
-        gltf.alpha_mode = Mtoon1MaterialPropertyGroup.ALPHA_MODE_MASK.identifier
-
-        cutoff = material_property.float_properties.get("_Cutoff")
-        if isinstance(cutoff, (int, float)):
-            gltf.alpha_cutoff = cutoff
-
-        self.assign_unlit_common_property(material, material_property)
-
-    def assign_unlit_transparent_property(
-        self,
-        material: Material,
-        material_property: MaterialProperty,
-    ) -> None:
-        gltf = get_material_extension(material).mtoon1
-        gltf.enabled = True
-        gltf.alpha_mode = Mtoon1MaterialPropertyGroup.ALPHA_MODE_BLEND.identifier
-
-        self.assign_unlit_common_property(material, material_property)
-
-    def assign_unlit_transparent_z_write_property(
-        self,
-        material: Material,
-        material_property: MaterialProperty,
-    ) -> None:
-        gltf = get_material_extension(material).mtoon1
-        gltf.enabled = True
-        gltf.alpha_mode = Mtoon1MaterialPropertyGroup.ALPHA_MODE_BLEND.identifier
-
-        mtoon = gltf.extensions.vrmc_materials_mtoon
-        mtoon.transparent_with_z_write = True
-
-        self.assign_unlit_common_property(material, material_property)
 
     def load_gltf_extensions(self) -> None:
         armature = self.armature
@@ -802,11 +734,7 @@ class Vrm0Importer(AbstractBaseVrmImporter):
                     continue
 
                 node = human_bone_dict.get("node")
-                if not isinstance(node, int):
-                    continue
-
-                node_bone_name = self.bone_names.get(node)
-                if node_bone_name is None:
+                if not isinstance(node, int) or node not in self.bone_names:
                     continue
 
                 human_bone = next(
@@ -822,7 +750,7 @@ class Vrm0Importer(AbstractBaseVrmImporter):
                 else:
                     human_bone = humanoid.human_bones.add()
                 human_bone.bone = bone
-                human_bone.node.bone_name = node_bone_name
+                human_bone.node.set_bone_name(self.bone_names[node])
 
                 use_default_values = human_bone_dict.get("useDefaultValues")
                 if isinstance(use_default_values, bool):
@@ -842,36 +770,36 @@ class Vrm0Importer(AbstractBaseVrmImporter):
                 if center is not None:
                     human_bone.center = center
 
-                axis_length = convert.float_or_none(human_bone_dict.get("axisLength"))
-                if axis_length is not None:
+                axis_length = human_bone_dict.get("axisLength")
+                if isinstance(axis_length, (int, float)):
                     human_bone.axis_length = axis_length
 
-        arm_stretch = convert.float_or_none(humanoid_dict.get("armStretch"))
-        if arm_stretch is not None:
+        arm_stretch = humanoid_dict.get("armStretch")
+        if isinstance(arm_stretch, (int, float)):
             humanoid.arm_stretch = arm_stretch
 
-        leg_stretch = convert.float_or_none(humanoid_dict.get("legStretch"))
-        if leg_stretch is not None:
+        leg_stretch = humanoid_dict.get("legStretch")
+        if isinstance(leg_stretch, (int, float)):
             humanoid.leg_stretch = leg_stretch
 
-        upper_arm_twist = convert.float_or_none(humanoid_dict.get("upperArmTwist"))
-        if upper_arm_twist is not None:
+        upper_arm_twist = humanoid_dict.get("upperArmTwist")
+        if isinstance(upper_arm_twist, (int, float)):
             humanoid.upper_arm_twist = upper_arm_twist
 
-        lower_arm_twist = convert.float_or_none(humanoid_dict.get("lowerArmTwist"))
-        if lower_arm_twist is not None:
+        lower_arm_twist = humanoid_dict.get("lowerArmTwist")
+        if isinstance(lower_arm_twist, (int, float)):
             humanoid.lower_arm_twist = lower_arm_twist
 
-        upper_leg_twist = convert.float_or_none(humanoid_dict.get("upperLegTwist"))
-        if upper_leg_twist is not None:
+        upper_leg_twist = humanoid_dict.get("upperLegTwist")
+        if isinstance(upper_leg_twist, (int, float)):
             humanoid.upper_leg_twist = upper_leg_twist
 
-        lower_leg_twist = convert.float_or_none(humanoid_dict.get("lowerLegTwist"))
-        if lower_leg_twist is not None:
+        lower_leg_twist = humanoid_dict.get("lowerLegTwist")
+        if isinstance(lower_leg_twist, (int, float)):
             humanoid.lower_leg_twist = lower_leg_twist
 
-        feet_spacing = convert.float_or_none(humanoid_dict.get("feetSpacing"))
-        if feet_spacing is not None:
+        feet_spacing = humanoid_dict.get("feetSpacing")
+        if isinstance(feet_spacing, (int, float)):
             humanoid.feet_spacing = feet_spacing
 
         has_translation_dof = humanoid_dict.get("hasTranslationDoF")
@@ -887,10 +815,10 @@ class Vrm0Importer(AbstractBaseVrmImporter):
             return
 
         first_person_bone = first_person_dict.get("firstPersonBone")
-        if isinstance(first_person_bone, int) and (
-            first_person_bone_name := self.bone_names.get(first_person_bone)
-        ):
-            first_person.first_person_bone.bone_name = first_person_bone_name
+        if isinstance(first_person_bone, int) and first_person_bone in self.bone_names:
+            first_person.first_person_bone.set_bone_name(
+                self.bone_names[first_person_bone]
+            )
 
         first_person_bone_offset = convert.vrm_json_vector3_to_tuple(
             first_person_dict.get("firstPersonBoneOffset")
@@ -1015,7 +943,9 @@ class Vrm0Importer(AbstractBaseVrmImporter):
                                 bind.index = list(shape_keys.key_blocks.keys())[
                                     index + 1
                                 ]
-                    weight = convert.float_or(bind_dict.get("weight"), 0.0)
+                    weight = bind_dict.get("weight")
+                    if not isinstance(weight, (int, float)):
+                        weight = 0
                     bind.weight = min(max(weight / 100.0, 0), 1)
 
             material_value_dicts = blend_shape_group_dict.get("materialValues")
@@ -1042,8 +972,8 @@ class Vrm0Importer(AbstractBaseVrmImporter):
                     target_value_vector = material_value_dict.get("targetValue")
                     if isinstance(target_value_vector, list):
                         for v in target_value_vector:
-                            material_value.target_value.add().value = convert.float_or(
-                                v, 0.0
+                            material_value.target_value.add().value = (
+                                v if isinstance(v, (int, float)) else 0
                             )
 
             is_binary = blend_shape_group_dict.get("isBinary")
@@ -1078,12 +1008,11 @@ class Vrm0Importer(AbstractBaseVrmImporter):
                 continue
 
             node = collider_group_dict.get("node")
-            if not isinstance(node, int):
+            if not isinstance(node, int) or node not in self.bone_names:
                 continue
-            bone_name = self.bone_names.get(node)
-            if bone_name is None:
-                continue
-            collider_group.node.bone_name = bone_name
+
+            bone_name = self.bone_names[node]
+            collider_group.node.set_bone_name(bone_name)
             collider_dicts = collider_group_dict.get("colliders")
             if not isinstance(collider_dicts, list):
                 continue
@@ -1098,7 +1027,9 @@ class Vrm0Importer(AbstractBaseVrmImporter):
                 if offset is None:
                     offset = (0, 0, 0)
 
-                radius = convert.float_or(collider_dict.get("radius"), 0.0)
+                radius = collider_dict.get("radius")
+                if not isinstance(radius, (int, float)):
+                    radius = 0
 
                 collider_name = f"{bone_name}_collider_{collider_index}"
                 obj = self.context.blend_data.objects.new(
@@ -1110,10 +1041,9 @@ class Vrm0Importer(AbstractBaseVrmImporter):
                 obj.parent_bone = bone_name
                 fixed_offset = [
                     offset[axis] * inv for axis, inv in zip([0, 2, 1], [-1, -1, 1])
-                ]  # TODO: Y-axis inversion is matched to UniVRM serialization
+                ]  # TODO: Y軸反転はUniVRMのシリアライズに合わせてる
 
-                # Since it's parented to the tail side of the bone, move it to the
-                # position from the root
+                # boneのtail側にparentされるので、根元からのpositionに動かしなおす
                 obj.matrix_world = Matrix.Translation(
                     [
                         armature.matrix_world.to_translation()[i]
@@ -1152,12 +1082,12 @@ class Vrm0Importer(AbstractBaseVrmImporter):
             if isinstance(comment, str):
                 bone_group.comment = comment
 
-            stiffiness = convert.float_or_none(bone_group_dict.get("stiffiness"))
-            if stiffiness is not None:
+            stiffiness = bone_group_dict.get("stiffiness")
+            if isinstance(stiffiness, (int, float)):
                 bone_group.stiffiness = stiffiness
 
-            gravity_power = convert.float_or_none(bone_group_dict.get("gravityPower"))
-            if gravity_power is not None:
+            gravity_power = bone_group_dict.get("gravityPower")
+            if isinstance(gravity_power, (int, float)):
                 bone_group.gravity_power = gravity_power
 
             gravity_dir = convert.vrm_json_vector3_to_tuple(
@@ -1168,54 +1098,47 @@ class Vrm0Importer(AbstractBaseVrmImporter):
                 (x, y, z) = gravity_dir
                 bone_group.gravity_dir = (x, z, y)
 
-            drag_force = convert.float_or_none(bone_group_dict.get("dragForce"))
-            if drag_force is not None:
+            drag_force = bone_group_dict.get("dragForce")
+            if isinstance(drag_force, (int, float)):
                 bone_group.drag_force = drag_force
 
             center = bone_group_dict.get("center")
-            if isinstance(center, int) and (
-                center_bone_name := self.bone_names.get(center)
-            ):
-                bone_group.center.bone_name = center_bone_name
+            if isinstance(center, int) and center in self.bone_names:
+                bone_group.center.set_bone_name(self.bone_names[center])
 
-            hit_radius = convert.float_or_none(bone_group_dict.get("hitRadius"))
-            if hit_radius is not None:
+            hit_radius = bone_group_dict.get("hitRadius")
+            if isinstance(hit_radius, (int, float)):
                 bone_group.hit_radius = hit_radius
 
             bones = bone_group_dict.get("bones")
             if isinstance(bones, list):
                 for bone in bones:
                     bone_prop = bone_group.bones.add()
-                    if not isinstance(bone, int):
+                    if not isinstance(bone, int) or bone not in self.bone_names:
                         continue
-                    bone_name = self.bone_names.get(bone)
-                    if bone_name is None:
-                        continue
-                    bone_prop.bone_name = bone_name
 
-            collider_group_indices = bone_group_dict.get("colliderGroups")
-            if isinstance(collider_group_indices, list):
-                for collider_group_index in collider_group_indices:
-                    if not isinstance(collider_group_index, int) or not (
-                        0
-                        <= collider_group_index
-                        < len(secondary_animation.collider_groups)
+                    bone_prop.set_bone_name(self.bone_names[bone])
+
+            collider_group_dicts = bone_group_dict.get("colliderGroups")
+            if isinstance(collider_group_dicts, list):
+                for collider_group in collider_group_dicts:
+                    if not isinstance(collider_group, int) or not (
+                        0 <= collider_group < len(secondary_animation.collider_groups)
                     ):
                         continue
                     collider_group_uuid = bone_group.collider_groups.add()
-                    collider_group = secondary_animation.collider_groups[
-                        collider_group_index
-                    ]
-                    collider_group_uuid.value = collider_group.uuid
+                    collider_group_uuid.value = secondary_animation.collider_groups[
+                        collider_group
+                    ].uuid
 
         for bone_group in secondary_animation.bone_groups:
             bone_group.refresh(armature)
 
         collider_object_names = [
-            collider_bpy_object.name
+            collider.bpy_object.name
             for collider_group in secondary_animation.collider_groups
             for collider in collider_group.colliders
-            if (collider_bpy_object := collider.bpy_object)
+            if collider.bpy_object is not None
         ]
         if collider_object_names:
             imported_object_names = self.imported_object_names
@@ -1283,27 +1206,24 @@ class Vrm0Importer(AbstractBaseVrmImporter):
 
 
 def setup_bones(context: Context, armature: Object) -> None:
-    """Set the direction and length of Human Bones.
+    """Human Boneの方向と長さを設定する.
 
-    VRM0 does not have bone direction and length, so currently FORTUNE's
-    direction and length determination is performed at import time. However,
-    since FORTUNE does not consider human body structure, it can result in
-    unnatural bones. Therefore, we determine direction and length using a
-    heuristic method that considers human body structure.
+    VRM0はボーンの方向と長さを持たないため、現在はインポート時にFORTUNEによる方向と長さ決めを行っている。
+    ただ、FORTUNEは人体の構造を考慮しないため、不自然なボーンになることがある。そのため、人体の構造を考慮した
+    ヒューリスティックな方式で方向と長さを決める。
 
-    Things to do someday:
-        Limit the Head angle to within 30 degrees from the parent angle.
-        Add elevation angle when Toes or Foot are not touching the ground.
+    いつかやりたいこと:
+        Headの角度を、親の角度から30度以内に制限
+        ToesやFootが接地していない場合は仰角をつける。
     """
-    armature_data = armature.data
-    if not isinstance(armature_data, Armature):
+    if not isinstance(armature.data, Armature):
         return
-    addon_extension = get_armature_extension(armature_data)
+    addon_extension = get_armature_extension(armature.data)
 
     Vrm0HumanoidPropertyGroup.fixup_human_bones(armature)
     Vrm0HumanoidPropertyGroup.update_all_node_candidates(
         context,
-        armature_data.name,
+        armature.data.name,
         force=True,
     )
 
@@ -1346,13 +1266,13 @@ def setup_bones(context: Context, armature: Object) -> None:
             bone_name,
             human_bone_name,
         ) in bone_name_to_human_bone_name.items():
-            # The current algorithm cannot handle
+            # 現在のアルゴリズムでは
             #
             #   head ---- node ---- leftEye
             #                   \
             #                    -- rightEye
             #
-            # well, so we don't process leftEye and rightEye
+            # を上手く扱えないので、leftEyeとrightEyeは処理しない
             if human_bone_name in [HumanBoneName.RIGHT_EYE, HumanBoneName.LEFT_EYE]:
                 continue
 
@@ -1425,11 +1345,9 @@ def setup_bones(context: Context, armature: Object) -> None:
                 continue
             human_bone_name_to_human_bone[n] = human_bone
 
-        # When VRM Humanoid terminal bones other than eye and head bones have
-        # multiple children, point them in the same direction as the parent.
-        # This results in a more natural direction than the default.
-        # Since it might be a direction specification by the VRM creator,
-        # do nothing when there is only one child.
+        # 目と頭のボーン以外のVRM Humanoidの先端のボーンに子が複数存在する場合
+        # 親と同じ方向に向ける。これでデフォルトよりも自然な方向になる。
+        # VRM制作者による方向指定かもしれないので、子が一つの場合は何もしない。
         for tip_bone_name in [
             HumanBoneName.JAW,
             HumanBoneName.LEFT_THUMB_DISTAL,
@@ -1448,15 +1366,14 @@ def setup_bones(context: Context, armature: Object) -> None:
             bone = None
             searching_tip_bone_name: Optional[HumanBoneName] = tip_bone_name
             while searching_tip_bone_name:
-                # Break if there is a corresponding bone
+                # 該当するボーンがあったらbreak
                 human_bone = human_bone_name_to_human_bone.get(searching_tip_bone_name)
                 if human_bone:
                     bone = armature_data.edit_bones.get(human_bone.node.bone_name)
                     if bone:
                         break
 
-                # If there is no corresponding bone and it was a required bone,
-                # abort due to data error
+                # 該当するボーンが無く、必須ボーンだった場合はデータのエラーのため中断
                 specification = HumanBoneSpecifications.get(searching_tip_bone_name)
                 if specification.requirement:
                     break
@@ -1467,8 +1384,7 @@ def setup_bones(context: Context, armature: Object) -> None:
                     )
                     break
 
-                # Do nothing if there are already assigned bones in the parent's
-                # descendants
+                # 親の子孫に割り当て済みのボーンがある場合は何もしない
                 assigned_parent_descendant_found = False
                 for parent_descendant in parent_specification.descendants():
                     parent_descendant_human_bone = human_bone_name_to_human_bone.get(
@@ -1498,10 +1414,9 @@ def setup_bones(context: Context, armature: Object) -> None:
             bone.roll = parent_bone.roll
             bone.tail = bone.head + parent_bone.vector / 2
 
-        # When eye bones have no children or multiple children, point them forward.
-        # This results in a more natural direction than the default.
-        # Since it might be a direction specification by the VRM creator,
-        # do nothing when there is only one child.
+        # 目のボーンに子が無いか複数存在する場合、正面に向ける。
+        # これでデフォルトよりも自然な方向になる。
+        # VRM制作者による方向指定かもしれないので、子が一つの場合は何もしない。
         for eye_human_bone in [
             human_bone_name_to_human_bone.get(HumanBoneName.LEFT_EYE),
             human_bone_name_to_human_bone.get(HumanBoneName.RIGHT_EYE),
@@ -1527,10 +1442,9 @@ def setup_bones(context: Context, armature: Object) -> None:
                 continue
             bone.tail = (Matrix.Translation(world_tail) @ world_inv).to_translation()
 
-        # When head bones have no children or multiple children, point them upward.
-        # This results in a more natural direction than the default.
-        # Since it might be a direction specification by the VRM creator,
-        # do nothing when there is only one child.
+        # 頭のボーンに子が無いか複数存在する場合、上に向ける。
+        # これでデフォルトよりも自然な方向になる。
+        # VRM制作者による方向指定かもしれないので、子が一つの場合は何もしない。
         for head_human_bone in [human_bone_name_to_human_bone.get(HumanBoneName.HEAD)]:
             if not head_human_bone or not head_human_bone.node.bone_name:
                 continue

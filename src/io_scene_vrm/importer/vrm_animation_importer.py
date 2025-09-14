@@ -77,8 +77,8 @@ class NodeRestPoseTree:
             @ Matrix.Diagonal(scale).to_4x4()
         )
 
-        # TODO: Is it an Euler angle in the case of 3 elements?
-        # TODO: Decompose if it's a Matrix
+        # TODO: 3要素の場合はオイラー角になるか?
+        # TODO: Matrixだったら分解する
 
         child_indices = node_dict.get("children")
         if isinstance(child_indices, list):
@@ -111,8 +111,7 @@ class VrmAnimationImporter:
         if not isinstance(armature_data, Armature):
             return {"CANCELLED"}
 
-        ext = get_armature_extension(armature_data)
-        humanoid = ext.vrm1.humanoid
+        humanoid = get_armature_extension(armature_data).vrm1.humanoid
         if not humanoid.human_bones.all_required_bones_are_assigned():
             return {"CANCELLED"}
 
@@ -120,11 +119,7 @@ class VrmAnimationImporter:
             setup_humanoid_t_pose(context, armature),
             save_workspace(context, armature, mode="POSE"),
         ):
-            result = import_vrm_animation(context, path, armature)
-            look_at_preview_enabled = ext.vrm1.look_at.enable_preview
-
-        ext.vrm1.look_at.enable_preview = look_at_preview_enabled
-        return result
+            return import_vrm_animation(context, path, armature)
 
 
 def find_root_node_index(
@@ -264,20 +259,18 @@ def import_vrm_animation(context: Context, path: Path, armature: Object) -> set[
     humanoid_action = context.blend_data.actions.new(name="Humanoid")
     if not armature.animation_data:
         armature.animation_data_create()
-    armature_animation_data = armature.animation_data
-    if not armature_animation_data:
+    if not armature.animation_data:
         message = "armature.animation_data is None"
         raise ValueError(message)
-    armature_animation_data.action = humanoid_action
+    armature.animation_data.action = humanoid_action
 
     expression_action = context.blend_data.actions.new(name="Expressions")
     if not armature_data.animation_data:
         armature_data.animation_data_create()
-    armature_data_animation_data = armature_data.animation_data
-    if not armature_data_animation_data:
+    if not armature_data.animation_data:
         message = "armature_data.animation_data is None"
         raise ValueError(message)
-    armature_data_animation_data.action = expression_action
+    armature_data.animation_data.action = expression_action
 
     node_index_to_translation_keyframes: dict[
         int, tuple[tuple[float, Vector], ...]
@@ -365,7 +358,7 @@ def import_vrm_animation(context: Context, path: Path, armature: Object) -> set[
 
         translation = node_dict.get("translation")
         if isinstance(translation, list) and translation:
-            default_preview_value = translation[0]  # TODO: In case of Matrix
+            default_preview_value = translation[0]  # TODO: Matrixだった場合
             if not isinstance(default_preview_value, (float, int)):
                 default_preview_value = 0.0
         else:
@@ -483,20 +476,6 @@ def import_vrm_animation(context: Context, path: Path, armature: Object) -> set[
                 timestamp,
             )
 
-    # This process should be done last because bone state changes occur.
-    # If translation is assigned to hips and hips is connected to parent
-    # with "use_connect", the movement animation will not be reflected, so
-    # we need to disconnect it
-    if node_index_to_translation_keyframes.get(hips_node_index):
-        with save_workspace(context, armature, mode="EDIT"):
-            armature_data = armature.data
-            if not isinstance(armature_data, Armature):
-                raise TypeError
-            hips_bone = armature_data.edit_bones.get(
-                humanoid.human_bones.hips.node.bone_name
-            )
-            if hips_bone and hips_bone.use_connect:
-                hips_bone.use_connect = False
     return {"FINISHED"}
 
 
@@ -737,17 +716,6 @@ def assign_humanoid_keyframe(
                     - rest_local_matrix.to_translation()
                 )
             )
-
-            # TODO: UniVRM seems to adjust the movement amount by the ratio of
-            # hips height. This is not described in the specification.
-            # Investigation of how it works in UniVRM source code is needed.
-            rest_world_translation_z = rest_world_matrix.to_translation().z
-            if abs(rest_world_translation_z) > 0:
-                world_height_ratio = (
-                    bone.matrix.to_translation().z / rest_world_translation_z
-                )
-                translation *= world_height_ratio
-
             # logger.debug(f"translation           = {dump(translation)}")
             backup_translation = bone.location.copy()
             bone.location = translation

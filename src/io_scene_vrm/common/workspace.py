@@ -10,14 +10,10 @@ import bpy
 from bpy.types import Context, Object
 from mathutils import Matrix
 
-from .logger import get_logger
-
-logger = get_logger(__name__)
-
 
 @dataclass(frozen=True)
 class SavedWorkspace:
-    # Be careful not to include objects that might disappear before and after yield
+    # yield前後で消えるかもしれないオブジェクトを含まないように注意する
     cursor_matrix: Matrix
     previous_object_name: Optional[str]
     previous_object_mode: Optional[str]
@@ -28,46 +24,45 @@ class SavedWorkspace:
 def enter_save_workspace(
     context: Context, obj: Optional[Object] = None, *, mode: str = "OBJECT"
 ) -> SavedWorkspace:
-    # Save the position of the 3D cursor
+    # 3Dカーソルの位置を保存
     cursor_matrix = context.scene.cursor.matrix.copy()
 
     previous_object_name = None
     previous_object_mode = None
     previous_object = context.view_layer.objects.active
     if previous_object:
-        # previous_object may disappear after yield.
-        # We intern it just in case, but it might not be necessary.
+        # yield後にprevious_objectが消える場合がある。
+        # いちおうinternをしておくが、不要かもしれない。
         previous_object_name = sys.intern(previous_object.name)
         previous_object_mode = sys.intern(previous_object.mode)
 
-        # If an obj argument is passed, set the mode to "OBJECT". If the mode
-        # stays as is, it may not be possible to change the active object
+        # obj引数が渡された場合モードを"OBJECT"にする。モードがそのままだと、
+        # アクティブなオブジェクトを変更できないことがある
         if previous_object != obj and previous_object_mode != "OBJECT":
             previous_object_hide_viewport = previous_object.hide_viewport
             if previous_object_hide_viewport:
-                # If hide_viewport is True, mode_set may fail if left as is
+                # hide_viewportがTrueの場合、そのままだとmode_setに失敗する可能性がある
                 previous_object.hide_viewport = False
             bpy.ops.object.mode_set(mode="OBJECT")
             if previous_object.hide_viewport != previous_object_hide_viewport:
                 previous_object.hide_viewport = previous_object_hide_viewport
 
-    # If an object is passed, make it active
+    # オブジェクトを渡された場合、それをアクティブにする
     if obj is not None:
         context.view_layer.objects.active = obj
         context.view_layer.update()
 
     active_object_name = None
     active_object_hide_viewport = False
-    # Change the mode of the active object
+    # アクティブなオブジェクトのモードを変更する
     active_object = context.view_layer.objects.active
     if active_object:
-        # active_object may disappear after yield.
-        # We intern it just in case, but it might not be necessary.
+        # yield後にactive_objectが消える場合がある。
+        # いちおうinternをしておくが、不要かもしれない。
         active_object_name = sys.intern(active_object.name)
         active_object_hide_viewport = active_object.hide_viewport
-        # If hide_viewport is True, mode_set may fail if left as is
-        # Currently we force it to be visible even when not changing mode,
-        # but this may be inappropriate
+        # hide_viewportがTrueの場合、そのままだとmode_setに失敗する可能性がある
+        # 現在はモードを変更しない場合も強制的に表示状態にしてあるが、不適切かも
         if active_object_hide_viewport:
             active_object.hide_viewport = False
         if active_object.mode != mode:
@@ -95,8 +90,8 @@ def exit_save_workspace(context: Context, saved_workspace: SavedWorkspace) -> No
 
     current_active_object = context.view_layer.objects.active
 
-    # Set the mode of the currently active object to "OBJECT". If the mode stays as is,
-    # it may not be possible to change the active object
+    # 現在アクティブなオブジェクトのモードを"OBJECT"にする。モードがそのままだと、
+    # アクティブなオブジェクトを変更できないことがある
     if (
         current_active_object
         and current_active_object != previous_object
@@ -109,13 +104,13 @@ def exit_save_workspace(context: Context, saved_workspace: SavedWorkspace) -> No
         if current_active_object.hide_viewport != current_active_object_hide_viewport:
             current_active_object.hide_viewport = current_active_object_hide_viewport
 
-    # Restore the hide_viewport of the activated object
+    # アクティブにしたオブジェクトのhide_viewportを戻す
     if active_object_name is not None:
         active_object = context.blend_data.objects.get(active_object_name)
         if active_object and active_object.hide_viewport != active_object_hide_viewport:
             active_object.hide_viewport = active_object_hide_viewport
 
-    # Return to the originally active object
+    # もともとアクティブだったオブジェクトに戻す
     previous_object = None
     if previous_object_name is not None:
         previous_object = context.blend_data.objects.get(previous_object_name)
@@ -124,14 +119,14 @@ def exit_save_workspace(context: Context, saved_workspace: SavedWorkspace) -> No
         context.view_layer.objects.active = previous_object
         context.view_layer.update()
 
-    # Restore the mode of the originally active object
+    # もともとアクティブだったオブジェクトのモードを戻す
     if (
         previous_object
         and previous_object_mode is not None
         and previous_object_mode != previous_object.mode
     ):
-        # If hide_viewport is True, mode_set may fail if left as is
-        # Restore hide_viewport after mode_set is completed
+        # hide_viewportがTrueの場合、そのままだとmode_setに失敗する可能性がある
+        # mode_setが完了してからhide_viewportを復元する
         previous_object_hide_viewport = previous_object.hide_viewport
         if previous_object_hide_viewport:
             previous_object.hide_viewport = False
@@ -139,7 +134,7 @@ def exit_save_workspace(context: Context, saved_workspace: SavedWorkspace) -> No
         if previous_object.hide_viewport != previous_object_hide_viewport:
             previous_object.hide_viewport = previous_object_hide_viewport
 
-    # Restore the 3D cursor position
+    # 3Dカーソルをの位置をもとに戻す
     context.scene.cursor.matrix = cursor_matrix
 
 
@@ -150,10 +145,6 @@ def save_workspace(
     saved_workspace = enter_save_workspace(context, obj, mode=mode)
     try:
         yield
-        # After yield, bpy native objects may be deleted or become invalid
-        # as frames advance. Accessing them in this state can cause crashes,
-        # so be careful not to access potentially invalid native objects
-        # after yield
     finally:
         exit_save_workspace(context, saved_workspace)
 
@@ -166,55 +157,33 @@ def wm_append_without_library(
     append_filename: str,
     append_directory: str,
 ) -> set[str]:
-    """Call wm.append and remove the added libraries.
+    """wm.appendを呼び、追加されたライブラリを削除する.
 
-    Used to work around the issue where wm.append adding libraries causes
-    asset library addition to fail.
+    wm.appendがライブラリを追加するとアセットライブラリの追加に失敗する問題を回避するために使う。
     https://github.com/saturday06/VRM-Addon-for-Blender/issues/631
     https://github.com/saturday06/VRM-Addon-for-Blender/issues/646
     """
-    # https://projects.blender.org/blender/blender/src/tag/v2.93.18/source/blender/windowmanager/intern/wm_files_link.c#L85-L90
-    with save_workspace(context):
-        # List of pointers for library addition detection.
-        # Used only for addition detection. Be careful not to dereference,
-        # as it is dangerous.
-        existing_library_pointers: list[int] = [
-            library.as_pointer() for library in context.blend_data.libraries
-        ]
+    # ライブラリの追加検知用のポインタリスト。
+    # 追加検知のみに用いる。特に、デリファレンスは危険なので行わないように注意する。
+    existing_library_pointers = [
+        library.as_pointer() for library in context.blend_data.libraries
+    ]
 
-        result = bpy.ops.wm.append(
-            filepath=append_filepath,
-            filename=append_filename,
-            directory=append_directory,
-            link=False,
-        )
-        if result != {"FINISHED"}:
-            return result
-
-        # Remove one added library.
-        # Reverse order to handle recursive calls, but effectiveness is unconfirmed.
-        for library in reversed(list(context.blend_data.libraries)):
-            if not blend_path.samefile(library.filepath):
-                continue
-
-            if library.as_pointer() in existing_library_pointers:
-                continue
-
-            if bpy.app.version >= (3, 2) and library.use_extra_user:
-                library.use_extra_user = False
-            if library.users:
-                logger.warning(
-                    'Failed to remove "%s" with %d users'
-                    " while appending blend file:"
-                    ' filepath="%s" filename="%s" directory="%s"',
-                    library.name,
-                    library.users,
-                    append_filepath,
-                    append_filename,
-                    append_directory,
-                )
-            else:
-                context.blend_data.libraries.remove(library)
-
-            break
+    result = bpy.ops.wm.append(
+        filepath=append_filepath,
+        filename=append_filename,
+        directory=append_directory,
+        link=False,
+    )
+    if result != {"FINISHED"}:
         return result
+
+    # 追加されたライブラリを一つ削除。
+    # 再帰的な呼び出しに対応するため逆順にしているが、効果があるかは未確認。
+    for library in reversed(list(context.blend_data.libraries)):
+        if not blend_path.samefile(library.filepath):
+            continue
+        if library.users <= 1 and library.as_pointer() not in existing_library_pointers:
+            context.blend_data.libraries.remove(library)
+        break
+    return result

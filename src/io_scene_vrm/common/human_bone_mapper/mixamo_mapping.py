@@ -1,10 +1,7 @@
 # SPDX-License-Identifier: MIT OR GPL-3.0-or-later
-from collections.abc import Mapping
-from typing import Final
-
 from ..vrm1.human_bone import HumanBoneSpecification, HumanBoneSpecifications
 
-MAPPING: Final[Mapping[str, HumanBoneSpecification]] = {
+mapping: dict[str, HumanBoneSpecification] = {
     "mixamorig:Head": HumanBoneSpecifications.HEAD,
     "mixamorig:Neck": HumanBoneSpecifications.NECK,
     "mixamorig:Spine2": HumanBoneSpecifications.UPPER_CHEST,
@@ -59,4 +56,4 @@ MAPPING: Final[Mapping[str, HumanBoneSpecification]] = {
     "mixamorig:LeftHandPinky3": HumanBoneSpecifications.LEFT_LITTLE_DISTAL,
 }
 
-CONFIG: Final = ("Mixamo", MAPPING)
+config = ("Mixamo", mapping)

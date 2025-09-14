@@ -3,16 +3,16 @@
 
 set -eu -o pipefail
 
-mkdir -p ~/.local/bin
+mkdir -p ~/.local/bin ~/.local/hugo_extended
 
 case "$(uname -m)" in
 "x86_64")
-  url=https://github.com/mvdan/sh/releases/download/v3.12.0/shfmt_v3.12.0_linux_amd64
-  sha256=d9fbb2a9c33d13f47e7618cf362a914d029d02a6df124064fff04fd688a745ea
+  url=https://github.com/mvdan/sh/releases/download/v3.9.0/shfmt_v3.9.0_linux_amd64
+  md5=fda7444998e303df59afe61de38fe63a
   ;;
 "aarch64")
-  url=https://github.com/mvdan/sh/releases/download/v3.12.0/shfmt_v3.12.0_linux_arm64
-  sha256=5f3fe3fa6a9f766e6a182ba79a94bef8afedafc57db0b1ad32b0f67fae971ba4
+  url=https://github.com/mvdan/sh/releases/download/v3.9.0/shfmt_v3.9.0_linux_arm64
+  md5=3f07c773219b3666bff11950faa510b6
   ;;
 *)
   exit 0
@@ -28,6 +28,6 @@ curl \
   --output shfmt.tmp \
   "$url"
 
-test "$(sha256sum shfmt.tmp)" = "$sha256  shfmt.tmp"
+test "$(md5sum shfmt.tmp)" = "$md5  shfmt.tmp"
 chmod 755 shfmt.tmp
 mv shfmt.tmp ~/.local/bin/shfmt

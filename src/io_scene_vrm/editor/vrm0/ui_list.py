@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: MIT OR GPL-3.0-or-later
-from bpy.types import Armature, Context, Mesh, UILayout, UIList
+from bpy.types import Context, Mesh, UILayout, UIList
 
-from ...common.logger import get_logger
 from ..extension import get_armature_extension
 from ..property_group import BonePropertyGroup, StringPropertyGroup
 from .property_group import (
@@ -14,8 +13,6 @@ from .property_group import (
     Vrm0SecondaryAnimationColliderPropertyGroup,
     Vrm0SecondaryAnimationGroupPropertyGroup,
 )
-
-logger = get_logger(__name__)
 
 
 class VRM_UL_vrm0_first_person_mesh_annotation(UIList):
@@ -121,7 +118,7 @@ class VRM_UL_vrm0_secondary_animation_group_bone(UIList):
 
     def draw_item(
         self,
-        _context: Context,
+        context: Context,
         layout: UILayout,
         bone_group: object,
         bone: object,
@@ -135,7 +132,9 @@ class VRM_UL_vrm0_secondary_animation_group_bone(UIList):
             return
         if not isinstance(bone, BonePropertyGroup):
             return
-        armature = bone.find_armature()
+        armature = context.blend_data.armatures.get(bone.armature_data_name)
+        if armature is None:
+            return
 
         icon = "BONE_DATA"
 
@@ -166,7 +165,7 @@ class VRM_UL_vrm0_secondary_animation_group_collider_group(UIList):
 
     def draw_item(
         self,
-        _context: Context,
+        context: Context,
         layout: UILayout,
         bone_group: object,
         collider_group: object,
@@ -181,14 +180,14 @@ class VRM_UL_vrm0_secondary_animation_group_collider_group(UIList):
         if not isinstance(collider_group, StringPropertyGroup):
             return
 
-        armature_data = bone_group.id_data
-        if not isinstance(armature_data, Armature):
-            logger.error("Failed to find armature")
+        secondary_animation = None
+        for armature in context.blend_data.armatures:
+            ext = get_armature_extension(armature).vrm0
+            if any(bone_group == bg for bg in ext.secondary_animation.bone_groups):
+                secondary_animation = ext.secondary_animation
+                break
+        if secondary_animation is None:
             return
-
-        secondary_animation = get_armature_extension(
-            armature_data
-        ).vrm0.secondary_animation
 
         icon = "PIVOT_INDIVIDUAL"
 
@@ -279,23 +278,22 @@ class VRM_UL_vrm0_secondary_animation_collider_group_collider(UIList):
         if self.layout_type not in {"DEFAULT", "COMPACT"}:
             return
 
-        bpy_object = collider.bpy_object
-        if bpy_object is None:
+        if collider.bpy_object is None:
             return
 
         row = layout.split(align=True, factor=0.7)
         if index == collider_group.active_collider_index:
             row.prop(
-                bpy_object,
+                collider.bpy_object,
                 "name",
                 icon=icon,
                 translate=False,
                 text="",
             )
-            row.prop(bpy_object, "empty_display_size", text="")
+            row.prop(collider.bpy_object, "empty_display_size", text="")
         else:
-            row.label(text=bpy_object.name, icon=icon, translate=False)
-            row.prop(bpy_object, "empty_display_size", text="", emboss=False)
+            row.label(text=collider.bpy_object.name, icon=icon, translate=False)
+            row.prop(collider.bpy_object, "empty_display_size", text="", emboss=False)
 
 
 class VRM_UL_vrm0_blend_shape_group(UIList):
@@ -411,9 +409,8 @@ class VRM_UL_vrm0_material_value_bind(UIList):
             return
 
         name = ""
-        material = material_value_bind.material
-        if material:
-            name = material.name
+        if material_value_bind.material:
+            name = material_value_bind.material.name
             if material_value_bind.property_name:
                 name += " / " + material_value_bind.property_name
         layout.label(text=name, translate=False, icon="MATERIAL")

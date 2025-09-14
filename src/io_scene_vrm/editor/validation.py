@@ -21,6 +21,7 @@ from bpy.types import (
     ShaderNodeTexImage,
     UILayout,
 )
+from mathutils import Vector
 
 from ..common import shader, version
 from ..common.legacy_gltf import RGBA_INPUT_NAMES, TEXTURE_INPUT_NAMES, VAL_INPUT_NAMES
@@ -49,7 +50,7 @@ class VrmValidationError(PropertyGroup):
 
 class WM_OT_vrm_validator(Operator):
     bl_idname = "vrm.model_validate"
-    bl_label = "Check VRM Model"
+    bl_label = "Check as VRM Model"
     bl_description = "NO Quad_Poly & N_GON, NO unSkined Mesh etc..."
 
     show_successful_message: BoolProperty(  # type: ignore[valid-type]
@@ -126,7 +127,7 @@ class WM_OT_vrm_validator(Operator):
             messages.append(
                 pgettext(
                     'Couldn\'t assign "{bone}" bone'
-                    + ' to VRM Human Bone "{human_bone}". '
+                    + ' to VRM Humanoid Bone: "{human_bone}". '
                     + 'Confirm hierarchy of "{bone}" and its children. '
                     + '"VRM" Panel → "Humanoid" → "{human_bone}" is empty'
                     + " if wrong hierarchy"
@@ -168,7 +169,7 @@ class WM_OT_vrm_validator(Operator):
             messages.append(
                 pgettext(
                     'Couldn\'t assign "{bone}" bone'
-                    + ' to VRM Human Bone "{human_bone}". '
+                    + ' to VRM Humanoid Bone: "{human_bone}". '
                     + 'Confirm hierarchy of "{bone}" and its children. '
                     + '"VRM" Panel → "Humanoid" → "{human_bone}" is empty'
                     + " if wrong hierarchy"
@@ -248,53 +249,46 @@ class WM_OT_vrm_validator(Operator):
         armature_count = len([True for obj in export_objects if obj.type == "ARMATURE"])
         if armature_count >= 2:  # only one armature
             error_messages.append(
-                pgettext("VRM exporter needs only one armature not some armatures.")
+                pgettext("VRM exporter needs only one armature not some armatures")
             )
         if armature_count == 0:
             info_messages.append(pgettext("No armature exists."))
 
         for obj in export_objects:
-            if (parnet_obj := obj.parent) and obj.parent_type in ["VERTEX", "VERTEX_3"]:
-                skippable_warning_messages.append(
-                    pgettext(
-                        'The vertex "{parent_name}" is set as the parent of "{name}",'
-                        + " but this is not supported in VRM."
-                    ).format(name=obj.name, parent_name=parnet_obj.name)
-                )
-            if (parnet_obj := obj.parent) and obj.parent_type == "LATTICE":
-                skippable_warning_messages.append(
-                    pgettext(
-                        '"{lattice}" is set as the {parent_type} for "{name}",'
-                        + " but this is not supported in VRM."
-                    ).format(
-                        name=obj.name,
-                        parent_type=pgettext("Parent Type"),
-                        lattice=pgettext("Lattice"),
-                    )
-                )
             if obj.type in search.MESH_CONVERTIBLE_OBJECT_TYPES:
                 if obj.name in node_names:
                     error_messages.append(
                         pgettext(
-                            "glTF nodes (mesh, bone) cannot have duplicate names."
-                            + " {name} is duplicated."
+                            "VRM exporter need Nodes(mesh,bones) name is unique. {name}"
+                            + " is doubled."
                         ).format(name=obj.name)
                     )
                 if obj.name not in node_names:
                     node_names.append(obj.name)
             if (
+                obj.type in search.MESH_CONVERTIBLE_OBJECT_TYPES
+                and obj.parent is not None
+                and obj.parent.type != "ARMATURE"
+                and obj.location != Vector([0.0, 0.0, 0.0])
+            ):  # mesh and armature origin is on [0,0,0]
+                info_messages.append(
+                    pgettext("There are not on origine location object {name}").format(
+                        name=obj.name
+                    )
+                )
+            if (
                 obj.type == "MESH"
-                and isinstance(obj_data := obj.data, Mesh)
-                and (obj_data_shape_keys := obj_data.shape_keys) is not None
-                and len(obj_data_shape_keys.key_blocks)
+                and isinstance(obj.data, Mesh)
+                and obj.data.shape_keys is not None
+                and len(obj.data.shape_keys.key_blocks)
                 >= 2  # Exclude a "Basis" shape key
                 and any(
                     modifier.type != "ARMATURE"
                     and not (
                         modifier.type == "NODES"
                         and isinstance(modifier, NodesModifier)
-                        and (modifier_node_group := modifier.node_group)
-                        and modifier_node_group.name
+                        and modifier.node_group
+                        and modifier.node_group.name
                         == shader.OUTLINE_GEOMETRY_GROUP_NAME
                     )
                     for modifier in obj.modifiers
@@ -304,7 +298,7 @@ class WM_OT_vrm_validator(Operator):
                     pgettext(
                         'The "{name}" mesh has both a non-armature modifier'
                         + " and a shape key. However, they cannot coexist"
-                        + ", so shape keys may not be exported correctly."
+                        + ", so shape keys may not be export correctly."
                     ).format(name=obj.name)
                 )
             if obj.type == "ARMATURE" and armature_count == 1:
@@ -371,7 +365,7 @@ class WM_OT_vrm_validator(Operator):
                         if not human_bones.allow_non_humanoid_rig:
                             error_messages.append(
                                 pgettext(
-                                    'Required VRM Human Bone "{humanoid_name}" is'
+                                    'Required VRM Bone "{humanoid_name}" is'
                                     + " not assigned. Please confirm hierarchy"
                                     + " of {humanoid_name} and its children. "
                                     + '"VRM" Panel → "Humanoid" → {humanoid_name}'
@@ -406,10 +400,10 @@ class WM_OT_vrm_validator(Operator):
                             ):
                                 error_messages.append(
                                     pgettext(
-                                        'VRM Human Bone "{child}" needs "{parent}".'
+                                        'VRM Bone "{child}" needs "{parent}".'
                                         + " Please confirm"
                                         + ' "VRM" Panel → "Humanoid"'
-                                        + ' → "Optional VRM Human Bones" → "{parent}".'
+                                        + ' → "VRM Optional Bones" → "{parent}".'
                                     ).format(
                                         child=human_bone_specification.title,
                                         parent=parent.title,
@@ -421,8 +415,8 @@ class WM_OT_vrm_validator(Operator):
                     ):
                         warning_messages.append(
                             pgettext(
-                                "This armature will be exported but not as a humanoid."
-                                + " It cannot have animations applied"
+                                "This armature will be exported but not as humanoid."
+                                + " It can not have animations applied"
                                 + " for humanoid avatars."
                             )
                         )
@@ -454,7 +448,7 @@ class WM_OT_vrm_validator(Operator):
                         all_required_bones_exist = False
                         error_messages.append(
                             pgettext(
-                                'Required VRM Human Bone "{humanoid_name}" is'
+                                'Required VRM Bone "{humanoid_name}" is'
                                 + " not assigned. Please confirm hierarchy"
                                 + " of {humanoid_name} and its children."
                                 + ' "VRM" Panel → "VRM 0.x Humanoid" → {humanoid_name}'
@@ -476,8 +470,8 @@ class WM_OT_vrm_validator(Operator):
                     if poly.loop_total > 3:  # polygons need all triangle
                         info_messages.append(
                             pgettext(
-                                'Non-triangular faces detected in "{name}". '
-                                + "They will be triangulated automatically.",
+                                'Non-tri faces detected in "{name}". '
+                                + "will be triangulated automatically.",
                             ).format(name=obj.name)
                         )
                         break
@@ -487,8 +481,8 @@ class WM_OT_vrm_validator(Operator):
 
         if (
             armature is not None
-            and isinstance(armature_data := armature.data, Armature)
-            and get_armature_extension(armature_data).is_vrm1()
+            and isinstance(armature.data, Armature)
+            and get_armature_extension(armature.data).is_vrm1()
         ):
             error_messages.extend(
                 pgettext(
@@ -501,7 +495,7 @@ class WM_OT_vrm_validator(Operator):
             )
 
             joint_chain_bone_names_to_spring_vrm_name: dict[str, str] = {}
-            for spring in get_armature_extension(armature_data).spring_bone1.springs:
+            for spring in get_armature_extension(armature.data).spring_bone1.springs:
                 joint_bone_names: list[str] = []
                 for joint in spring.joints:
                     bone_name = joint.node.bone_name
@@ -511,7 +505,7 @@ class WM_OT_vrm_validator(Operator):
                 joint_chain_bone_names: list[str] = []
                 for bone_name in joint_bone_names:
                     search_joint_chain_bone_names: list[str] = []
-                    bone = armature_data.bones.get(bone_name)
+                    bone = armature.data.bones.get(bone_name)
                     terminated = False
                     while bone:
                         if bone.name != bone_name and bone.name in joint_bone_names:
@@ -547,27 +541,25 @@ class WM_OT_vrm_validator(Operator):
 
         used_materials = search.export_materials(context, export_objects)
         used_images: list[Image] = []
-        bones_names = []
-        if armature is not None and isinstance(
-            armature_data := armature.data, Armature
-        ):
-            bones_names = [b.name for b in armature_data.bones]
+        bones_name = []
+        if armature is not None and isinstance(armature.data, Armature):
+            bones_name = [b.name for b in armature.data.bones]
         vertex_error_count = 0
 
         for mesh in [obj for obj in export_objects if obj.type == "MESH"]:
-            if not isinstance(mesh_data := mesh.data, Mesh):
+            if not isinstance(mesh.data, Mesh):
                 continue
 
             mesh_vertex_group_names = [g.name for g in mesh.vertex_groups]
 
-            for v in mesh_data.vertices:
+            for v in mesh.data.vertices:
                 if not v.groups and mesh.parent_bone == "":
                     if vertex_error_count > 5:
                         continue
                     if (
                         armature is not None
-                        and isinstance((armature_data := armature.data), Armature)
-                        and get_armature_extension(armature_data).is_vrm1()
+                        and isinstance(armature.data, Armature)
+                        and get_armature_extension(armature.data).is_vrm1()
                     ):
                         continue
                     info_messages.append(
@@ -583,7 +575,7 @@ class WM_OT_vrm_validator(Operator):
                     for g in v.groups:
                         if (
                             0 <= g.group < len(mesh_vertex_group_names)
-                            and mesh_vertex_group_names[g.group] in bones_names
+                            and mesh_vertex_group_names[g.group] in bones_name
                             and g.weight < float_info.epsilon
                         ):
                             weight_count += 1
@@ -599,12 +591,9 @@ class WM_OT_vrm_validator(Operator):
                         vertex_error_count = vertex_error_count + 1
 
         for mat in used_materials:
-            if (
-                not (mat_node_tree := mat.node_tree)
-                or get_material_extension(mat).mtoon1.enabled
-            ):
+            if not mat.node_tree or get_material_extension(mat).mtoon1.enabled:
                 continue
-            for node in mat_node_tree.nodes:
+            for node in mat.node_tree.nodes:
                 if node.type != "OUTPUT_MATERIAL":
                     continue
 
@@ -696,8 +685,8 @@ class WM_OT_vrm_validator(Operator):
             for texture in gltf.all_textures(
                 downgrade_to_mtoon0=(
                     armature is None
-                    or not isinstance(armature_data := armature.data, Armature)
-                    or get_armature_extension(armature_data).is_vrm0()
+                    or not isinstance(armature.data, Armature)
+                    or get_armature_extension(armature.data).is_vrm0()
                 )
             ):
                 source = texture.get_connected_node_image()
@@ -727,8 +716,8 @@ class WM_OT_vrm_validator(Operator):
 
                 if (
                     armature is None
-                    or not isinstance((armature_data := armature.data), Armature)
-                    or not get_armature_extension(armature_data).is_vrm0()
+                    or not isinstance(armature.data, Armature)
+                    or not get_armature_extension(armature.data).is_vrm0()
                     or not source
                 ):
                     continue
@@ -774,23 +763,23 @@ class WM_OT_vrm_validator(Operator):
 
         if (
             armature is not None
-            and isinstance(armature_data := armature.data, Armature)
-            and get_armature_extension(armature_data).is_vrm0()
+            and isinstance(armature.data, Armature)
+            and get_armature_extension(armature.data).is_vrm0()
         ):
             # first_person
-            first_person = get_armature_extension(armature_data).vrm0.first_person
+            first_person = get_armature_extension(armature.data).vrm0.first_person
             if not first_person.first_person_bone.bone_name:
                 info_messages.append(
                     pgettext(
-                        "firstPersonBone was not found. "
-                        + 'VRM HumanBone "head" will be used automatically instead.'
+                        "firstPersonBone is not found. "
+                        + 'Set VRM HumanBone "head" instead automatically.'
                     )
                 )
 
             # blend_shape_master
             # TODO: material value and material existence
             blend_shape_master = get_armature_extension(
-                armature_data
+                armature.data
             ).vrm0.blend_shape_master
             for blend_shape_group in blend_shape_master.blend_shape_groups:
                 for bind in blend_shape_group.binds:
@@ -841,8 +830,8 @@ class WM_OT_vrm_validator(Operator):
 
         error_messages.extend(
             pgettext(
-                '"{image_name}" was not found at file path "{image_filepath}". '
-                + "Please load the file in Blender."
+                '"{image_name}" is not found in file path "{image_filepath}". '
+                + "please load file of it in Blender."
             ).format(image_name=image.name, image_filepath=image.filepath_from_user())
             for image in used_images
             if (
@@ -903,7 +892,7 @@ class WM_OT_vrm_validator(Operator):
             row.emboss = "NONE"
             row.box().label(
                 text=pgettext(
-                    "No errors found. But there are {warning_count} warning(s)."
+                    "No error. But there're {warning_count} warning(s)."
                     + " The output may not be what you expected."
                 ).format(
                     warning_count=len(warning_errors),
@@ -913,7 +902,7 @@ class WM_OT_vrm_validator(Operator):
         elif not error_errors and show_successful_message:
             row = layout.row()
             row.emboss = "NONE"
-            row.box().label(text="No errors found. Ready to export VRM")
+            row.box().label(text="No error. Ready for export VRM")
 
         if error_errors:
             layout.label(text="Error", icon="ERROR")
@@ -994,13 +983,13 @@ def node_material_input_check(
                 )
             )
         elif expect_node_type == "TEX_IMAGE" and isinstance(n, ShaderNodeTexImage):
-            if (image := n.image) is not None:
-                if image not in used_images:
-                    used_images.append(image)
+            if n.image is not None:
+                if n.image not in used_images:
+                    used_images.append(n.image)
             else:
                 messages.append(
                     pgettext(
-                        'Image in material "{material_name}" is not set.'
-                        + " Please add an image.",
+                        'image in material "{material_name}" is not put.'
+                        + " Please set image.",
                     ).format(material_name=material.name)
                 )

@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: MIT OR GPL-3.0-or-later
 # SPDX-FileCopyrightText: 2018 iCyP
 
-import os
 from typing import Union
 
 import bpy
@@ -28,8 +27,7 @@ from bpy.types import (
     VIEW3D_MT_armature_add,
 )
 
-from .common import error_dialog, preferences, scene_watcher, shader
-from .common.debug import cleanse_modules
+from .common import preferences, shader
 from .common.logger import get_logger
 from .common.version import trigger_clear_addon_version_cache
 from .editor import (
@@ -55,20 +53,19 @@ from .editor.spring_bone1 import panel as spring_bone1_panel
 from .editor.spring_bone1 import property_group as spring_bone1_property_group
 from .editor.spring_bone1 import ui_list as spring_bone1_ui_list
 from .editor.vrm0 import handler as vrm0_handler
-from .editor.vrm0 import menu as vrm0_menu
 from .editor.vrm0 import ops as vrm0_ops
 from .editor.vrm0 import panel as vrm0_panel
 from .editor.vrm0 import property_group as vrm0_property_group
 from .editor.vrm0 import ui_list as vrm0_ui_list
 from .editor.vrm1 import handler as vrm1_handler
-from .editor.vrm1 import menu as vrm1_menu
 from .editor.vrm1 import ops as vrm1_ops
 from .editor.vrm1 import panel as vrm1_panel
 from .editor.vrm1 import property_group as vrm1_property_group
 from .editor.vrm1 import ui_list as vrm1_ui_list
+from .editor.bmesh_encoding import property_group as bmesh_encoding_property_group
 from .exporter import export_scene
 from .external import io_scene_gltf2_support
-from .importer import import_scene
+from .importer import file_handler, import_scene
 from .locale.translation_dictionary import translation_dictionary
 
 logger = get_logger(__name__)
@@ -76,12 +73,10 @@ logger = get_logger(__name__)
 
 def setup(*, load_post: bool) -> None:
     context = bpy.context
-    if preferences.get_preferences(context).add_mtoon_shader_node_group:
-        shader.add_mtoon1_auto_setup_shader_node_group(context)
+    shader.add_shaders(context)
     migration.migrate_all_objects(context, show_progress=True)
     mtoon1_property_group.setup_drivers(context)
     subscription.setup_subscription(load_post=load_post)
-    scene_watcher.setup()
 
 
 @persistent
@@ -185,6 +180,11 @@ classes: list[
     vrm1_property_group.Vrm1ExpressionsPropertyGroup,
     vrm1_property_group.Vrm1MetaPropertyGroup,
     vrm1_property_group.Vrm1PropertyGroup,
+    bmesh_encoding_property_group.BmeshEncodingVertexPropertyGroup,
+    bmesh_encoding_property_group.BmeshEncodingEdgePropertyGroup,
+    bmesh_encoding_property_group.BmeshEncodingLoopPropertyGroup,
+    bmesh_encoding_property_group.BmeshEncodingFacePropertyGroup,
+    bmesh_encoding_property_group.BmeshEncodingPropertyGroup,
     node_constraint1_property_group.NodeConstraint1NodeConstraintPropertyGroup,
     spring_bone1_property_group.SpringBone1ExtendedColliderShapeSpherePropertyGroup,
     spring_bone1_property_group.SpringBone1ExtendedColliderShapeCapsulePropertyGroup,
@@ -267,7 +267,6 @@ classes: list[
     panel.VRM_PT_controller_unsupported_blender_version_warning,
     panel.VRM_PT_controller,
     panel.VRM_PT_vrm_armature_object_property,
-    vrm0_menu.VRM_MT_vrm0_blend_shape_master,
     vrm0_ui_list.VRM_UL_vrm0_first_person_mesh_annotation,
     vrm0_ui_list.VRM_UL_vrm0_blend_shape_bind,
     vrm0_ui_list.VRM_UL_vrm0_blend_shape_group,
@@ -308,7 +307,6 @@ classes: list[
     spring_bone1_panel.VRM_PT_spring_bone1_armature_object_property,
     spring_bone1_panel.VRM_PT_spring_bone1_ui,
     spring_bone1_panel.VRM_PT_spring_bone1_collider_property,
-    vrm1_menu.VRM_MT_vrm1_expression,
     vrm1_ui_list.VRM_UL_vrm1_meta_author,
     vrm1_ui_list.VRM_UL_vrm1_meta_reference,
     vrm1_ui_list.VRM_UL_vrm1_first_person_mesh_annotation,
@@ -334,7 +332,6 @@ classes: list[
     vrm0_ops.VRM_OT_remove_vrm0_blend_shape_bind,
     vrm0_ops.VRM_OT_move_down_vrm0_blend_shape_bind,
     vrm0_ops.VRM_OT_move_up_vrm0_blend_shape_bind,
-    vrm0_ops.VRM_OT_restore_vrm0_blend_shape_group_bind_object,
     vrm0_ops.VRM_OT_add_vrm0_secondary_animation_collider_group_collider,
     vrm0_ops.VRM_OT_remove_vrm0_secondary_animation_collider_group_collider,
     vrm0_ops.VRM_OT_move_up_vrm0_secondary_animation_collider_group_collider,
@@ -356,7 +353,6 @@ classes: list[
     vrm0_ops.VRM_OT_move_up_vrm0_secondary_animation_collider_group,
     vrm0_ops.VRM_OT_move_down_vrm0_secondary_animation_collider_group,
     vrm0_ops.VRM_OT_assign_vrm0_humanoid_human_bones_automatically,
-    vrm0_ops.VRM_OT_show_vrm0_bone_assignment_diagnostics,
     vrm1_ops.VRM_OT_add_vrm1_meta_author,
     vrm1_ops.VRM_OT_remove_vrm1_meta_author,
     vrm1_ops.VRM_OT_move_up_vrm1_meta_author,
@@ -373,7 +369,6 @@ classes: list[
     vrm1_ops.VRM_OT_remove_vrm1_expression_morph_target_bind,
     vrm1_ops.VRM_OT_move_up_vrm1_expression_morph_target_bind,
     vrm1_ops.VRM_OT_move_down_vrm1_expression_morph_target_bind,
-    vrm1_ops.VRM_OT_restore_vrm1_expression_morph_target_bind_object,
     vrm1_ops.VRM_OT_add_vrm1_expression_material_color_bind,
     vrm1_ops.VRM_OT_remove_vrm1_expression_material_color_bind,
     vrm1_ops.VRM_OT_move_up_vrm1_expression_material_color_bind,
@@ -389,7 +384,6 @@ classes: list[
     vrm1_ops.VRM_OT_assign_vrm1_humanoid_human_bones_automatically,
     vrm1_ops.VRM_OT_update_vrm1_expression_ui_list_elements,
     vrm1_ops.VRM_OT_refresh_vrm1_expression_texture_transform_bind_preview,
-    vrm1_ops.VRM_OT_show_vrm1_bone_assignment_diagnostics,
     spring_bone1_ops.VRM_OT_add_spring_bone1_collider,
     spring_bone1_ops.VRM_OT_remove_spring_bone1_collider,
     spring_bone1_ops.VRM_OT_move_up_spring_bone1_collider,
@@ -440,10 +434,6 @@ classes: list[
     export_scene.EXPORT_SCENE_OT_vrm,
     export_scene.EXPORT_SCENE_OT_vrma,
     export_scene.VRM_PT_export_vrma_help,
-    error_dialog.VrmErrorDialogMessageLine,
-    error_dialog.VRM_UL_vrm_error_dialog_message,
-    error_dialog.VRM_OT_save_error_dialog_message,
-    error_dialog.WM_OT_vrm_error_dialog,
     import_scene.LicenseConfirmation,
     import_scene.WM_OT_vrm_license_confirmation,
     import_scene.WM_OT_vrma_import_prerequisite,
@@ -451,6 +441,8 @@ classes: list[
     import_scene.IMPORT_SCENE_OT_vrm,
     import_scene.IMPORT_SCENE_OT_vrma,
     import_scene.VRM_PT_import_unsupported_blender_version_warning,
+    file_handler.VRM_OT_import_vrm_via_file_handler,
+    file_handler.VRM_OT_import_vrma_via_file_handler,
     preferences.VrmAddonPreferences,
     extension.VrmAddonArmatureExtensionPropertyGroup,
     extension.VrmAddonBoneExtensionPropertyGroup,
@@ -460,12 +452,8 @@ classes: list[
     extension.VrmAddonNodeTreeExtensionPropertyGroup,
 ]
 if bpy.app.version >= (4, 1):
-    from .importer import file_handler
-
     classes.extend(
         [
-            file_handler.VRM_OT_import_vrm_via_file_handler,
-            file_handler.VRM_OT_import_vrma_via_file_handler,
             file_handler.VRM_FH_vrm_import,
             file_handler.VRM_FH_vrma_import,
         ]
@@ -523,7 +511,8 @@ def register() -> None:
     bpy.app.handlers.depsgraph_update_pre.append(vrm1_handler.depsgraph_update_pre)
     bpy.app.handlers.depsgraph_update_pre.append(mtoon1_handler.depsgraph_update_pre)
     bpy.app.handlers.save_pre.append(save_pre)
-    bpy.app.handlers.save_pre.append(scene_watcher.save_pre)
+    bpy.app.handlers.save_pre.append(vrm1_handler.save_pre)
+    bpy.app.handlers.save_pre.append(mtoon1_handler.save_pre)
     bpy.app.handlers.frame_change_pre.append(spring_bone1_handler.frame_change_pre)
     bpy.app.handlers.frame_change_pre.append(vrm0_handler.frame_change_pre)
     bpy.app.handlers.frame_change_post.append(vrm0_handler.frame_change_post)
@@ -549,7 +538,8 @@ def unregister() -> None:
     bpy.app.handlers.frame_change_post.remove(vrm0_handler.frame_change_post)
     bpy.app.handlers.frame_change_pre.remove(vrm0_handler.frame_change_pre)
     bpy.app.handlers.frame_change_pre.remove(spring_bone1_handler.frame_change_pre)
-    bpy.app.handlers.save_pre.remove(scene_watcher.save_pre)
+    bpy.app.handlers.save_pre.remove(mtoon1_handler.save_pre)
+    bpy.app.handlers.save_pre.remove(vrm1_handler.save_pre)
     bpy.app.handlers.save_pre.remove(save_pre)
     bpy.app.handlers.depsgraph_update_pre.remove(mtoon1_handler.depsgraph_update_pre)
     bpy.app.handlers.depsgraph_update_pre.remove(vrm1_handler.depsgraph_update_pre)
@@ -592,10 +582,6 @@ def unregister() -> None:
         try:
             bpy.utils.unregister_class(cls)
         except RuntimeError:
-            logger.exception("Failed to unregister %s", cls)
+            logger.exception("Failed to Unregister %s", cls)
 
     bpy.app.translations.unregister(preferences.addon_package_name)
-
-    # https://github.com/saturday06/VRM-Addon-for-Blender/issues/506#issuecomment-2183766778
-    if os.getenv("BLENDER_VRM_DEVELOPMENT_MODE") == "yes":
-        cleanse_modules()

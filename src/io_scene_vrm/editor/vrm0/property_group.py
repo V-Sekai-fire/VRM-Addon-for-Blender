@@ -27,7 +27,6 @@ from bpy.types import (
 )
 from mathutils import Vector
 
-from ...common import convert
 from ...common.logger import get_logger
 from ...common.vrm0.human_bone import (
     HumanBoneName,
@@ -88,21 +87,19 @@ class Vrm0HumanoidBonePropertyGroup(PropertyGroup):
         self,
         armature_data: Armature,
         bpy_bone_name_to_human_bone_specification: dict[str, HumanBoneSpecification],
-        error_bpy_bone_names: Sequence[str],
-    ) -> bool:
+    ) -> None:
         human_bone_name = HumanBoneName.from_str(self.bone)
         if human_bone_name is None:
             logger.warning("Bone name '%s' is invalid", self.bone)
-            return False
+            return
         target = HumanBoneSpecifications.get(human_bone_name)
         new_candidates = BonePropertyGroup.find_bone_candidates(
             armature_data,
             target,
             bpy_bone_name_to_human_bone_specification,
-            error_bpy_bone_names,
         )
         if {n.value for n in self.node_candidates} == new_candidates:
-            return False
+            return
 
         self.node_candidates.clear()
         # Preserving list order
@@ -111,8 +108,6 @@ class Vrm0HumanoidBonePropertyGroup(PropertyGroup):
                 continue
             candidate = self.node_candidates.add()
             candidate.value = bone_name
-
-        return True
 
     def specification(self) -> HumanBoneSpecification:
         name = HumanBoneName.from_str(self.bone)
@@ -200,7 +195,9 @@ class Vrm0HumanoidPropertyGroup(PropertyGroup):
     pose_marker_name: StringProperty()  # type: ignore[valid-type]
 
     # for UI
-    last_bone_names_str: StringProperty()  # type: ignore[valid-type]
+    last_bone_names: CollectionProperty(  # type: ignore[valid-type]
+        type=StringPropertyGroup
+    )
     initial_automatic_bone_assignment: BoolProperty(  # type: ignore[valid-type]
         default=True
     )
@@ -232,8 +229,8 @@ class Vrm0HumanoidPropertyGroup(PropertyGroup):
     def update_all_node_candidates_timer_callback(
         armature_object_name: str, *, force: bool = False
     ) -> None:
-        """Wrap update_all_node_candidates() to match bpy.app.timers.register."""
-        context = bpy.context  # Context cannot cross frames so we need to get a new one
+        """update_all_node_candidates()の型をbpy.app.timers.registerに合わせるためのラッパー."""
+        context = bpy.context  # Contextはフレームを跨げないので新たに取得する
         Vrm0HumanoidPropertyGroup.update_all_node_candidates(
             context, armature_object_name, force=force
         )
@@ -253,22 +250,37 @@ class Vrm0HumanoidPropertyGroup(PropertyGroup):
         armature_data = context.blend_data.armatures.get(armature_data_name)
         if not armature_data:
             return
-
+        bones = armature_data.bones.values()
         humanoid = get_armature_extension(armature_data).vrm0.humanoid
-
-        bone_names_str = "\n".join(
-            bone.name + "\n" + (parent.name if (parent := bone.parent) else "")
-            for bone in sorted(armature_data.bones.values(), key=lambda b: b.name)
-        )
+        bone_names: list[str] = []
+        for bone in sorted(bones, key=lambda b: str(b.name)):
+            bone_names.append(bone.name)
+            bone_names.append(bone.parent.name if bone.parent else "")
 
         if not force:
-            up_to_date = bone_names_str == humanoid.last_bone_names_str
+            up_to_date = bone_names == [str(n.value) for n in humanoid.last_bone_names]
             if up_to_date:
                 return
 
-        humanoid.last_bone_names_str = bone_names_str
+        humanoid.last_bone_names.clear()
+        for bone_name in bone_names:
+            last_bone_name = humanoid.last_bone_names.add()
+            last_bone_name.value = bone_name
 
-        BonePropertyGroup.update_all_vrm0_node_candidates(armature_data)
+        bpy_bone_name_to_human_bone_specification: dict[str, HumanBoneSpecification] = {
+            human_bone.node.bone_name: HumanBoneSpecifications.get(
+                HumanBoneName(human_bone.bone)
+            )
+            for human_bone in humanoid.human_bones
+            if human_bone.node.bone_name
+            and HumanBoneName.from_str(human_bone.bone) is not None
+        }
+
+        for human_bone in humanoid.human_bones:
+            human_bone.update_node_candidates(
+                armature_data,
+                bpy_bone_name_to_human_bone_specification,
+            )
 
     @staticmethod
     def fixup_human_bones(obj: Object) -> None:
@@ -280,7 +292,7 @@ class Vrm0HumanoidPropertyGroup(PropertyGroup):
 
         humanoid = get_armature_extension(armature_data).vrm0.humanoid
 
-        # Add bone maps that don't exist
+        # 存在していないボーンマップを追加
         refresh = False
         for human_bone_name in HumanBoneSpecifications.all_names:
             if any(
@@ -292,7 +304,7 @@ class Vrm0HumanoidPropertyGroup(PropertyGroup):
             human_bone.bone = human_bone_name
             refresh = True
 
-        # Remove duplicate bone maps
+        # 二重に入っているボーンマップを削除
         fixup = True
         while fixup:
             fixup = False
@@ -309,7 +321,7 @@ class Vrm0HumanoidPropertyGroup(PropertyGroup):
                 fixup = True
                 break
 
-        # If multiple bone maps have the same Blender bone assigned, remove one of them
+        # 複数のボーンマップに同一のBlenderのボーンが設定されていたら片方を削除
         fixup = True
         while fixup:
             fixup = False
@@ -320,7 +332,7 @@ class Vrm0HumanoidPropertyGroup(PropertyGroup):
                 if human_bone.node.bone_name not in found_node_bone_names:
                     found_node_bone_names.append(human_bone.node.bone_name)
                     continue
-                human_bone.node.bone_name = ""
+                human_bone.node.set_bone_name(None)
                 refresh = True
                 fixup = True
                 break
@@ -353,7 +365,9 @@ class Vrm0HumanoidPropertyGroup(PropertyGroup):
         pose: str  # type: ignore[no-redef]
         pose_library: Optional[Action]  # type: ignore[no-redef]
         pose_marker_name: str  # type: ignore[no-redef]
-        last_bone_names_str: str  # type: ignore[no-redef]
+        last_bone_names: CollectionPropertyProtocol[  # type: ignore[no-redef]
+            StringPropertyGroup
+        ]
         initial_automatic_bone_assignment: bool  # type: ignore[no-redef]
 
 
@@ -525,8 +539,8 @@ class Vrm0MaterialValueBindPropertyGroup(PropertyGroup):
         type=Material,
     )
 
-    # Use StringProperty instead of EnumProperty for property_name.
-    # This is necessary to allow arbitrary values to be entered.
+    # property_nameはEnumPropertyではなくStringPropertyを使う。
+    # これは任意の値を入力できるようにする必要があるため。
     property_name: StringProperty(  # type: ignore[valid-type]
         name="Property Name"
     )
@@ -596,8 +610,8 @@ class Vrm0BlendShapeGroupPropertyGroup(PropertyGroup):
     active_bind_index: IntProperty(min=0)  # type: ignore[valid-type]
     active_material_value_index: IntProperty(min=0)  # type: ignore[valid-type]
 
-    # During animation playback, shape key values can only be changed
-    # in frame_change_pre/frame_change_post, so we store the changed values here
+    # アニメーション再生中はframe_change_pre/frame_change_postでしか
+    # シェイプキーの値の変更ができないので、変更された値をここに保存しておく
     frame_change_post_shape_key_updates: ClassVar[dict[tuple[str, str], float]] = {}
 
     def get_preview(self) -> float:
@@ -606,21 +620,20 @@ class Vrm0BlendShapeGroupPropertyGroup(PropertyGroup):
             return float(value)
         return 0.0
 
-    def set_preview(self, value_obj: object) -> None:
+    def set_preview(self, value: object) -> None:
         context = bpy.context
 
-        value = convert.float_or_none(value_obj)
-        if value is None:
+        if not isinstance(value, (int, float)):
             return
 
-        current_value = convert.float_or_none(self.get("preview"))
+        current_value = self.get("preview")
         if (
-            current_value is not None
+            isinstance(current_value, (int, float))
             and abs(current_value - value) < float_info.epsilon
         ):
             return
 
-        self["preview"] = value
+        self["preview"] = float(value)
 
         for bind in self.binds:
             mesh_object = context.blend_data.objects.get(bind.mesh.mesh_object_name)
@@ -712,7 +725,7 @@ class Vrm0SecondaryAnimationColliderGroupPropertyGroup(PropertyGroup):
         name="Node",
         type=BonePropertyGroup,
     )
-    # Use the collider's own data for offset and radius
+    # offsetとradiusはコライダー自身のデータを用いる
     colliders: CollectionProperty(  # type: ignore[valid-type]
         name="Colliders",
         type=Vrm0SecondaryAnimationColliderPropertyGroup,
@@ -721,13 +734,9 @@ class Vrm0SecondaryAnimationColliderGroupPropertyGroup(PropertyGroup):
     def refresh(self, armature: Object) -> None:
         from ..extension import get_armature_extension
 
-        name = (
+        self.name = (
             str(self.node.bone_name) if self.node and self.node.bone_name else ""
         ) + f"#{self.uuid}"
-
-        if self.name != name:
-            self.name = name
-
         for index, collider in reversed(
             tuple((index, collider) for index, collider in enumerate(self.colliders))
         ):
@@ -735,11 +744,9 @@ class Vrm0SecondaryAnimationColliderGroupPropertyGroup(PropertyGroup):
                 self.colliders.remove(index)
             else:
                 collider.refresh(armature, self.node.bone_name)
-
         armature_data = armature.data
         if not isinstance(armature_data, Armature):
             return
-
         for bone_group in get_armature_extension(
             armature_data
         ).vrm0.secondary_animation.bone_groups:
@@ -861,7 +868,7 @@ class Vrm0SecondaryAnimationGroupPropertyGroup(PropertyGroup):
             for collider_group in ext.vrm0.secondary_animation.collider_groups
         }
         for index, collider_group in reversed(list(enumerate(self.collider_groups))):
-            uuid_str = collider_group.value.split("#")[-1]
+            uuid_str = collider_group.value.split("#")[-1:][0]
             if not uuid_str:
                 self.collider_groups.remove(index)
                 continue
@@ -871,8 +878,7 @@ class Vrm0SecondaryAnimationGroupPropertyGroup(PropertyGroup):
                 self.collider_groups.remove(index)
                 continue
 
-            if collider_group.value != name:
-                collider_group.value = name
+            collider_group.value = name
 
     if TYPE_CHECKING:
         # This code is auto generated.
@@ -940,8 +946,8 @@ class Vrm0MetaPropertyGroup(PropertyGroup):
         ("CC_BY_NC", "CC BY NC", "", "NONE", 3),
         ("CC_BY_SA", "CC BY SA", "", "NONE", 4),
         ("CC_BY_NC_SA", "CC BY NC SA", "", "NONE", 5),
-        ("CC_BY_ND", "CC BY ND", "", "NONE", 6),  # codespell:ignore nd
-        ("CC_BY_NC_ND", "CC BY NC ND", "", "NONE", 7),  # codespell:ignore nd
+        ("CC_BY_ND", "CC BY ND", "", "NONE", 6),  # codespell-ignore
+        ("CC_BY_NC_ND", "CC BY NC ND", "", "NONE", 7),  # codespell-ignore
         ("Other", "Other", "", "NONE", 8),
     )
 
@@ -1028,13 +1034,6 @@ class Vrm0BlendShapeMasterPropertyGroup(PropertyGroup):
         name="Blend Shape Group",
         type=Vrm0BlendShapeGroupPropertyGroup,
     )
-
-    def restore_blend_shape_group_bind_object_assignments(
-        self, context: Context
-    ) -> None:
-        for blend_shape_group in self.blend_shape_groups:
-            for bind in blend_shape_group.binds:
-                bind.mesh.restore_object_assignment(context)
 
     # for UI
     active_blend_shape_group_index: IntProperty(min=0)  # type: ignore[valid-type]

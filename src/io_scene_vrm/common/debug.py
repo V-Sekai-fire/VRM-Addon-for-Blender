@@ -3,6 +3,8 @@ import math
 from collections.abc import Sequence
 from typing import Union
 
+import bpy
+from bpy.types import Context
 from mathutils import Matrix, Quaternion, Vector
 
 
@@ -40,21 +42,11 @@ def assert_vector3_equals(
         raise AssertionError(message)
 
 
-def cleanse_modules() -> None:
-    """Search for your plugin modules in blender python sys.modules and remove them.
-
-    To support reload properly, try to access a package var, if it's there,
-    reload everything.
-
-    This function may cause errors that are difficult to investigate. Please use with
-    caution. See also:
-    https://github.com/saturday06/VRM-Addon-for-Blender/issues/506#issuecomment-2183766778
-    """
-    import sys
-
-    all_modules = sys.modules
-    all_modules = dict(sorted(all_modules.items(), key=lambda x: x[0]))  # sort them
-
-    for k in all_modules:
-        if k == __name__ or k.startswith(__name__ + "."):
-            del sys.modules[k]
+def clean_scene(context: Context) -> None:
+    if context.view_layer.objects.active:
+        bpy.ops.object.mode_set(mode="OBJECT")
+    bpy.ops.object.select_all(action="SELECT")
+    bpy.ops.object.delete()
+    while context.blend_data.collections:
+        context.blend_data.collections.remove(context.blend_data.collections[0])
+    bpy.ops.outliner.orphans_purge(do_recursive=True)

@@ -336,7 +336,7 @@ class VRM_OT_convert_material_to_mtoon1(Operator):
 
         outline_color_mode = shader.get_float_value(node, "OutlineColorMode")
         if outline_color_mode is not None:
-            outline_color_mode = round(outline_color_mode)
+            outline_color_mode = int(round(outline_color_mode))
         else:
             outline_color_mode = 0
 
@@ -355,7 +355,7 @@ class VRM_OT_convert_material_to_mtoon1(Operator):
         )
         uv_animation_scroll_x_speed_factor = shader.get_float_value(node, "UV_Scroll_X")
         uv_animation_scroll_y_speed_factor = shader.get_float_value(node, "UV_Scroll_Y")
-        if uv_animation_scroll_y_speed_factor is not None:
+        if isinstance(uv_animation_scroll_y_speed_factor, float):
             uv_animation_scroll_y_speed_factor *= -1
 
         shader.load_mtoon1_shader(context, material, reset_node_groups=True)
@@ -442,7 +442,7 @@ class VRM_OT_convert_material_to_mtoon1(Operator):
         ).enable_mtoon_outline_preview
 
         if outline_width_mode_float is not None:
-            outline_width_mode = round(outline_width_mode_float)
+            outline_width_mode = int(round(outline_width_mode_float))
         else:
             outline_width_mode = 0
 
@@ -721,6 +721,10 @@ class NodesModifierInputKey:
     object_key: str
     enabled_key: str
 
+    @staticmethod
+    def keys_len() -> int:
+        return 15
+
     def outline_width_multiply_texture_uv_use_attribute_key(self) -> str:
         return self.outline_width_multiply_texture_uv_key + "_use_attribute"
 
@@ -746,26 +750,10 @@ def get_nodes_modifier_input_key(
             and isinstance(item, NodeTreeInterfaceSocket)
             and item.in_out == "INPUT"
         ]
-
-    if len(keys) < 15:
+    keys_len = NodesModifierInputKey.keys_len()
+    if len(keys) < keys_len:
         return None
-    return NodesModifierInputKey(
-        geometry_key=keys[0],
-        material_key=keys[1],
-        outline_material_key=keys[2],
-        outline_width_mode_key=keys[3],
-        outline_width_factor_key=keys[4],
-        outline_width_multiply_texture_key=keys[5],
-        outline_width_multiply_texture_exists_key=keys[6],
-        outline_width_multiply_texture_uv_key=keys[7],
-        outline_width_multiply_texture_uv_offset_x_key=keys[8],
-        outline_width_multiply_texture_uv_offset_y_key=keys[9],
-        outline_width_multiply_texture_uv_scale_x_key=keys[10],
-        outline_width_multiply_texture_uv_scale_y_key=keys[11],
-        extrude_mesh_individual_key=keys[12],
-        object_key=keys[13],
-        enabled_key=keys[14],
-    )
+    return NodesModifierInputKey(*keys[:keys_len])
 
 
 class VRM_OT_refresh_mtoon1_outline(Operator):
@@ -845,9 +833,8 @@ class VRM_OT_refresh_mtoon1_outline(Operator):
         modifier_name = f"MToon Outline ({material.name})"
 
         outline_material = get_material_extension(material).mtoon1.outline_material
-        reset_outline_material = False
-        if not outline_material:
-            reset_outline_material = True
+        reset_outline_material = not outline_material
+        if reset_outline_material:
             outline_material = context.blend_data.materials.new(
                 name=outline_material_name
             )
@@ -919,11 +906,11 @@ class VRM_OT_refresh_mtoon1_outline(Operator):
         ) = mtoon.outline_width_multiply_texture.extensions.khr_texture_transform.scale
 
         uv_layer_name = None
-        if isinstance((mesh_data := obj.data), Mesh):
+        if isinstance(obj.data, Mesh):
             uv_layer_name = next(
                 (
                     uv_layer.name
-                    for uv_layer in mesh_data.uv_layers
+                    for uv_layer in obj.data.uv_layers
                     if uv_layer and uv_layer.active_render
                 ),
                 None,
@@ -932,9 +919,6 @@ class VRM_OT_refresh_mtoon1_outline(Operator):
             uv_layer_name = "UVMap"
 
         has_auto_smooth = tuple(bpy.app.version) < (4, 1)
-        outline_width_multiply_texture_uv_use_attribute = (
-            True if tuple(bpy.app.version) >= (4, 2) else 1
-        )
         for k, v in [
             (input_key.material_key, material),
             (input_key.outline_material_key, outline_material),
@@ -948,10 +932,7 @@ class VRM_OT_refresh_mtoon1_outline(Operator):
                 input_key.outline_width_multiply_texture_exists_key,
                 bool(mtoon.outline_width_multiply_texture.index.source),
             ),
-            (
-                input_key.outline_width_multiply_texture_uv_use_attribute_key(),
-                outline_width_multiply_texture_uv_use_attribute,
-            ),
+            (input_key.outline_width_multiply_texture_uv_use_attribute_key(), 1),
             (
                 input_key.outline_width_multiply_texture_uv_attribute_name_key(),
                 uv_layer_name,
@@ -976,9 +957,9 @@ class VRM_OT_refresh_mtoon1_outline(Operator):
                 input_key.extrude_mesh_individual_key,
                 (
                     obj.type == "MESH"
-                    and isinstance(mesh_data := obj.data, Mesh)
-                    and not (has_auto_smooth and mesh_data.use_auto_smooth)
-                    and not any(polygon.use_smooth for polygon in mesh_data.polygons)
+                    and isinstance(obj.data, Mesh)
+                    and not (has_auto_smooth and obj.data.use_auto_smooth)
+                    and not any(polygon.use_smooth for polygon in obj.data.polygons)
                 ),
             ),
             (input_key.object_key, obj),

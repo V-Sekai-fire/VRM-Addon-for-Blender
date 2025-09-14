@@ -1,12 +1,10 @@
 @rem SPDX-License-Identifier: MIT OR GPL-3.0-or-later
 
 @echo off
+setlocal
 setlocal enabledelayedexpansion
 pushd "%~dp0.."
 set PYTHONUTF8=1
-
-set no_pause=0
-if "%1"=="/NoPause" set no_pause=1
 
 for /f "tokens=* usebackq" %%f in (`git ls-files "*.py"`) do ( set py_files=!py_files! %%f )
 
@@ -18,23 +16,29 @@ echo ### codespell ###
 call uv run codespell %py_files%
 if %errorlevel% neq 0 goto :error
 
-echo ### deno ###
-where deno > nul
+echo ### mypy ###
+call uv run mypy --show-error-codes .
+if %errorlevel% neq 0 goto :error
+
+echo ### npm ###
+where npm > nul
 if %errorlevel% neq 0 (
-  echo *** Please install `deno` command ***
+  echo *** Please install `npm` command ***
   goto :error
 )
-
-echo ### deno lint ###
-call deno lint
+call npm install > nul
 if %errorlevel% neq 0 goto :error
 
 echo ### pyright ###
-call deno run pyright
+call uv run .\node_modules\.bin\pyright.cmd --warnings
+if %errorlevel% neq 0 goto :error
+
+echo ### prettier ###
+call npm exec --yes -- prettier --check .
 if %errorlevel% neq 0 goto :error
 
 echo ### vrm validator ###
-call deno run vrm-validator
+call npm exec --yes --package=gltf-validator -- node .\tools\vrm_validator.js
 if %errorlevel% neq 0 goto :error
 
 popd
@@ -43,6 +47,7 @@ goto :quit
 :error
 rem echo error
 :quit
-if %no_pause% equ 0 pause
 endlocal
+endlocal
+pause
 echo on

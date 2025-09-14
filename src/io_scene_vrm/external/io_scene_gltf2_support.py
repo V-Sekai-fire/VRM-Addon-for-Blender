@@ -89,6 +89,19 @@ def init_extras_export() -> None:
         BLACK_LIST.append(key)
 
 
+def init_extras_import() -> None:
+    try:
+        if bpy.app.version < (4, 5):
+            from io_scene_gltf2.blender.com.gltf2_blender_extras import BLACK_LIST
+        else:
+            from io_scene_gltf2.blender.com.extras import BLACK_LIST
+    except ImportError:
+        return
+    key = "vrm_addon_extension"
+    if key not in BLACK_LIST:
+        BLACK_LIST.append(key)
+
+
 def create_export_settings() -> dict[str, object]:
     # https://github.com/KhronosGroup/glTF-Blender-IO/blob/b9bdc358ebf41e5f14be397d0d612cc8d645a09e/addons/io_scene_gltf2/__init__.py#L1054
     loglevel = logging.INFO

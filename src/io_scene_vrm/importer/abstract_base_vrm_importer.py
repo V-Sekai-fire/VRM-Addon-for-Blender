@@ -31,7 +31,7 @@ from bpy.types import (
 )
 from mathutils import Euler, Matrix
 
-from ..common import safe_removal, shader
+from ..common import shader
 from ..common.convert import Json
 from ..common.deep import make_json
 from ..common.fs import (
@@ -53,7 +53,7 @@ from ..external.io_scene_gltf2_support import (
     ImportSceneGltfArguments,
     import_scene_gltf,
 )
-from .gltf2_import_user_extension import glTF2ImportUserExtension
+from .gltf2_addon_importer_user_extension import Gltf2AddonImporterUserExtension
 from .license_validation import validate_license
 
 logger = get_logger(__name__)
@@ -88,7 +88,7 @@ class AbstractBaseVrmImporter(ABC):
         self.bone_names: dict[int, str] = {}
         self.materials: dict[int, Material] = {}
         self.bone_child_object_world_matrices: dict[str, Matrix] = {}
-        self.import_id = glTF2ImportUserExtension.update_current_import_id()
+        self.import_id = Gltf2AddonImporterUserExtension.update_current_import_id()
         self.temp_object_name_count = 0
         self.object_names: dict[int, str] = {}
         self.mesh_object_names: dict[int, str] = {}
@@ -131,9 +131,10 @@ class AbstractBaseVrmImporter(ABC):
                     self.context.view_layer.update()
                     progress.update(0.96)
 
-                    # Texture extraction occurs. During this process, .blend file saving
-                    # may occur and save callbacks may run, so be careful not to apply
-                    # those callbacks to incompletely imported VRM data
+                    # テクスチャの展開を行う。その際に.blendファイルの保存が発生して
+                    # 保存時のコールバックが走ることがあるため、中途半端にインポート
+                    # されたVRMのデータに対してそのコールバックが適用されないように
+                    # 注意する
                     if self.preferences.extract_textures_into_folder:
                         self.extract_textures(repack=False)
                     elif bpy.app.version < (3, 1):
@@ -146,7 +147,10 @@ class AbstractBaseVrmImporter(ABC):
                 self.setup_object_selection_and_activation()
                 progress.update(0.98)
         finally:
-            glTF2ImportUserExtension.clear_current_import_id()
+            Gltf2AddonImporterUserExtension.clear_current_import_id()
+            # Clear preprocessor data after import completion
+            from ..editor.bmesh_encoding.preprocessor import BmeshEncodingPreprocessor
+            BmeshEncodingPreprocessor.clear_extracted_data()
 
     @property
     def armature_data(self) -> Armature:
@@ -160,78 +164,45 @@ class AbstractBaseVrmImporter(ABC):
         return armature_data
 
     @staticmethod
-    def enter_save_bone_child_object_transforms(
-        context: Context, armature_object: Object
-    ) -> Optional[Mapping[str, Matrix]]:
-        armature_data = armature_object.data
-        if not isinstance(armature_data, Armature):
-            return None
+    @contextlib.contextmanager
+    def save_bone_child_object_transforms(
+        context: Context, armature: Object
+    ) -> Iterator[Armature]:
+        if not isinstance(armature.data, Armature):
+            message = f"{type(armature.data)} is not an Armature"
+            raise TypeError(message)
 
-        # Save the world matrices of child objects of bones before editing
+        # 編集前のボーンの子オブジェクトのワールド行列を保存
         context.view_layer.update()
         bone_child_object_world_matrices: dict[str, Matrix] = {}
         for obj in context.blend_data.objects:
             if (
                 obj.parent_type == "BONE"
-                and obj.parent == armature_object
-                and obj.parent_bone in armature_data.bones
+                and obj.parent == armature
+                and obj.parent_bone in armature.data.bones
             ):
                 bone_child_object_world_matrices[obj.name] = obj.matrix_world.copy()
 
-        return bone_child_object_world_matrices
-
-    @staticmethod
-    def leave_save_bone_child_object_transforms(
-        context: Context,
-        armature_object: Object,
-        bone_child_object_world_matrices: Mapping[str, Matrix],
-    ) -> None:
-        armature_data = armature_object.data
-        if not isinstance(armature_data, Armature):
-            message = f"{type(armature_data)} is not an Armature"
-            raise TypeError(message)
-        # Restore the world matrices of child objects of bones before editing
-        context.view_layer.update()
-        for name, matrix_world in bone_child_object_world_matrices.items():
-            restore_obj = context.blend_data.objects.get(name)
-            if (
-                restore_obj
-                and restore_obj.parent_type == "BONE"
-                and restore_obj.parent == armature_object
-                and restore_obj.parent_bone in armature_data.bones
-            ):
-                restore_obj.matrix_world = matrix_world.copy()
-        context.view_layer.update()
-
-    @staticmethod
-    @contextlib.contextmanager
-    def save_bone_child_object_transforms(
-        context: Context, armature: Object
-    ) -> Iterator[Armature]:
-        bone_child_object_world_matrices = (
-            AbstractBaseVrmImporter.enter_save_bone_child_object_transforms(
-                context, armature
-            )
-        )
         try:
             with save_workspace(context, armature, mode="EDIT"):
-                armature_data = armature.data
-                if not isinstance(armature_data, Armature):
-                    message = f"{type(armature_data)} is not an Armature"
-                    raise TypeError(message)
-                yield armature_data
-                # After yield, bpy native objects may be deleted or frames may advance
-                # making them invalid. Accessing them in this state can cause crashes,
-                # so be careful not to access such native objects after yield
+                yield armature.data
         finally:
-            if bone_child_object_world_matrices is not None:
-                AbstractBaseVrmImporter.leave_save_bone_child_object_transforms(
-                    context, armature, bone_child_object_world_matrices
-                )
+            # 編集前のボーンの子オブジェクトのワールド行列を復元
+            context.view_layer.update()
+            for name, matrix_world in bone_child_object_world_matrices.items():
+                restore_obj = context.blend_data.objects.get(name)
+                if (
+                    restore_obj
+                    and restore_obj.parent_type == "BONE"
+                    and restore_obj.parent == armature
+                    and restore_obj.parent_bone in armature.data.bones
+                ):
+                    restore_obj.matrix_world = matrix_world.copy()
+            context.view_layer.update()
 
     def use_fake_user_for_thumbnail(self) -> None:
-        # The thumbnail is specified as an image index in the VRM specification,
-        # but in UniVRM's implementation it's a texture index
+        # サムネイルはVRMの仕様ではimageのインデックスとあるが、UniVRMの実装ではtexture
+        # のインデックスになっている
         # https://github.com/vrm-c/UniVRM/blob/v0.67.0/Assets/VRM/Runtime/IO/VRMImporterself.context.cs#L308
         meta_dict = self.parse_result.vrm0_extension_dict.get("meta")
         if not isinstance(meta_dict, dict):
@@ -278,9 +249,8 @@ class AbstractBaseVrmImporter(ABC):
             material.use_backface_culling = False
         if material.show_transparent_back:
             material.show_transparent_back = False
-        node_tree = material.node_tree
-        if node_tree:
-            node_tree.nodes.new("ShaderNodeOutputMaterial")
+        if material.node_tree:
+            material.node_tree.nodes.new("ShaderNodeOutputMaterial")
         else:
             logger.error("No node tree for material %s", material.name)
 
@@ -301,11 +271,10 @@ class AbstractBaseVrmImporter(ABC):
                 image.filepath_raw = f"//{image_name}.{image_type}"
 
     def extract_textures(self, *, repack: bool) -> None:
-        """Extract textures to a folder as files.
+        """テクスチャをファイルにフォルダに展開します.
 
-        In Blender 3.1 and later, texture extraction requires saving the .blend file.
-        Therefore, the file is saved, but be careful that file save callbacks may run
-        during this process.
+        Blender 3.1以降ではテクスチャの展開は.blendファイルを保存しないとできない。
+        そのためファイルを保存するが、その際にファイル保存コールバックが走るのに注意してください。
         """
         dir_path = self.parse_result.filepath.with_suffix(".vrm.textures").absolute()
         if self.preferences.make_new_texture_folder or repack:
@@ -335,7 +304,9 @@ class AbstractBaseVrmImporter(ABC):
                     image_path_stem = re.sub(
                         r"^\d+_",
                         "",
-                        image_path_stem[len(legacy_image_name_prefix) :],
+                        image_path_stem[
+                            slice(len(legacy_image_name_prefix), len(image_path_stem))
+                        ],
                     )
             if not image_path_stem:
                 image_path_stem = image.name
@@ -381,10 +352,10 @@ class AbstractBaseVrmImporter(ABC):
         if repack:
             shutil.rmtree(dir_path, ignore_errors=True)
 
-    # Be careful not to let bones proliferate by repeating VRM re-import.
-    # Things to pay special attention to:
-    # - Root bones
-    # - Bones that have meshes parented to them
+    # VRM再インポートを繰り返すことでボーンが増殖しないように注意。
+    # 特に注意するべきもの:
+    # - ルートボーン
+    # - メッシュがペアレンティングされているボーン
     def find_retain_node_indices(self, scene_dict: dict[str, Json]) -> list[int]:
         scene_node_index_jsons = scene_dict.get("nodes")
         if not isinstance(scene_node_index_jsons, list):
@@ -408,8 +379,8 @@ class AbstractBaseVrmImporter(ABC):
 
         bone_node_indices = self.find_vrm_bone_node_indices()
 
-        # Collect all nodes in the scene node tree where the hips bone exists.
-        # Also treat the root node of that tree as a bone.
+        # シーンノードツリーのうち、hipsボーンが存在するツリーの全てのノードを集める。
+        # また、そのツリーのルートノードもボーン扱いする。
         all_scene_node_indices: list[int] = []
         hips_found = False
         for scene_node_index in scene_node_indices:
@@ -442,7 +413,7 @@ class AbstractBaseVrmImporter(ABC):
 
         all_scene_node_indices = list(dict.fromkeys(all_scene_node_indices))  # Distinct
 
-        # Also treat indices registered in skin as bones
+        # skinに登録されているインデックスもボーン扱いする
         for node_index in all_scene_node_indices:
             if not 0 <= node_index < len(node_dicts):
                 continue
@@ -460,12 +431,12 @@ class AbstractBaseVrmImporter(ABC):
                     if isinstance(joint_index, int):
                         bone_node_indices.append(joint_index)
 
-        # Remove bone indices that are not in the scene node index
+        # ボーンインデックスからシーンノードindexに入ってないヤツを削除
         for bone_node_index in list(bone_node_indices):
             if bone_node_index not in all_scene_node_indices:
                 bone_node_indices.remove(bone_node_index)
 
-        # Add children from currently found bone nodes until hitting mesh nodes
+        # 現在見つかっているボーンノードから、メッシュノードにぶつかるまで子供を追加
         search_bone_node_indices = list(bone_node_indices)
         while search_bone_node_indices:
             search_bone_node_index = search_bone_node_indices.pop()
@@ -487,8 +458,8 @@ class AbstractBaseVrmImporter(ABC):
                     continue
                 search_bone_node_indices.append(child_index)
 
-        # If a mesh node has bone nodes as children,
-        # treat that mesh node as a bone too
+        # メッシュノードの子供にボーンノードが存在する場合は、
+        # そのメッシュノードもボーン扱いする
         bone_node_indices.extend(
             functools.reduce(
                 operator.iconcat,
@@ -498,7 +469,7 @@ class AbstractBaseVrmImporter(ABC):
                     )
                     for bone_node_index in bone_node_indices
                 ],
-                list[int](),
+                [],
             )
         )
 
@@ -539,6 +510,10 @@ class AbstractBaseVrmImporter(ABC):
 
     def import_gltf2_with_indices(self) -> None:
         json_dict, buffer0_bytes = parse_glb(self.parse_result.filepath.read_bytes())
+        
+        # Preprocess glTF JSON to extract BMesh encoding data and prevent import errors
+        from ..editor.bmesh_encoding.preprocessor import BmeshEncodingPreprocessor
+        json_dict = BmeshEncodingPreprocessor.preprocess_gltf_json(json_dict)
 
         for key in ["nodes", "materials", "meshes"]:
             if key not in json_dict or not isinstance(json_dict[key], list):
@@ -907,8 +882,8 @@ class AbstractBaseVrmImporter(ABC):
 
                 scene_nodes.append(skin_node_index)
 
-        # Prevent errors when extensions not supported by the glTF 2.0 add-on
-        # are included in "extensionsRequired"
+        # glTF 2.0アドオンが未対応のエクステンションが
+        # "extensionsRequired"に含まれている場合はエラーになる。それを抑止。
         extensions_required = json_dict.get("extensionsRequired")
         if isinstance(extensions_required, list):
             for supported_extension in [
@@ -962,6 +937,10 @@ class AbstractBaseVrmImporter(ABC):
         else:
             bone_heuristic = "BLENDER"
         full_vrm_import_success = False
+        # Initialize import protection before glTF import
+        from ..external.io_scene_gltf2_support import init_extras_import
+        init_extras_import()
+        
         with tempfile.TemporaryDirectory() as temp_dir:
             indexed_vrm_filepath = Path(temp_dir, "indexed.vrm")
             indexed_vrm_filepath.write_bytes(pack_glb(json_dict, buffer0_bytes))
@@ -1012,7 +991,7 @@ class AbstractBaseVrmImporter(ABC):
                     )
                     self.cleanup_gltf2_with_indices()
                     raise
-        # Save the selection state of objects immediately after glTF import
+        # glTFインポート直後のオブジェクトの選択状態を保存
         self.imported_object_names = [
             selected_object.name for selected_object in self.context.selected_objects
         ]
@@ -1120,8 +1099,8 @@ class AbstractBaseVrmImporter(ABC):
             obj.pop(extras_mesh_index_key, None)
             data.pop(extras_mesh_index_key, None)
 
-            # In Blender 3.6, custom properties of materials referenced from
-            # evaluated meshes may remain as cache forever if not deleted
+            # Blender 3.6ではevaluatedされたメッシュから参照されるマテリアルの
+            # カスタムプロパティも消さないとキャッシュとしてずっと残ることがある
             restore_modifiers_names: list[str] = []
             for modifier in obj.modifiers:
                 if modifier.show_viewport:
@@ -1139,7 +1118,7 @@ class AbstractBaseVrmImporter(ABC):
                 if modifier.name in restore_modifiers_names:
                     modifier.show_viewport = True
 
-            # If not updated here, Custom Property may revive during export
+            # ここでupdateしないとエクスポート時にCustom Propertyが復活することがある
             data.update()
 
         for image in list(self.context.blend_data.images):
@@ -1158,8 +1137,8 @@ class AbstractBaseVrmImporter(ABC):
             if isinstance(image_dicts, list) and 0 <= custom_image_index < len(
                 image_dicts
             ):
-                # image.name may be automatically shortened during import, so
-                # restore it from the json value
+                # image.nameはインポート時に勝手に縮められてしまうことがあるので、
+                # jsonの値から復元する
                 image_dict = image_dicts[custom_image_index]
                 indexed_image_name = None
 
@@ -1186,53 +1165,44 @@ class AbstractBaseVrmImporter(ABC):
         if self.context.object is not None and self.context.object.mode == "EDIT":
             bpy.ops.object.mode_set(mode="OBJECT")
 
-        for scene in list(self.context.blend_data.scenes):
-            if not self.is_temp_object_name(scene.name):
-                continue
-            if bpy.app.version >= (3, 2) and scene.use_extra_user:
-                scene.use_extra_user = False
-            if scene.users:
-                logger.warning(
-                    'Failed to remove "%s" with %d users while removing temp scenes',
-                    scene.name,
-                    scene.users,
-                )
-            else:
-                self.context.blend_data.scenes.remove(scene)
+        while True:
+            temp_object = next(
+                (
+                    o
+                    for o in self.context.blend_data.objects
+                    if o and o.users <= 1 and self.is_temp_object_name(o.name)
+                ),
+                None,
+            )
+            if not temp_object:
+                break
+            self.context.blend_data.objects.remove(temp_object)
 
-        for obj in list(self.context.blend_data.objects):
-            if not self.is_temp_object_name(obj.name):
-                continue
-            if not safe_removal.remove_object(self.context, obj):
-                logger.warning(
-                    'Failed to remove "%s" with %d users while removing temp objects',
-                    obj.name,
-                    obj.users,
-                )
+        while True:
+            temp_mesh = next(
+                (
+                    m
+                    for m in self.context.blend_data.meshes
+                    if m and m.users <= 1 and self.is_temp_object_name(m.name)
+                ),
+                None,
+            )
+            if not temp_mesh:
+                break
+            self.context.blend_data.meshes.remove(temp_mesh)
 
-        for mesh in list(self.context.blend_data.meshes):
-            if not self.is_temp_object_name(mesh.name):
-                continue
-            if mesh.users:
-                logger.warning(
-                    'Failed to remove "%s" with %d users while removing temp meshes',
-                    mesh.name,
-                    mesh.users,
-                )
-            else:
-                self.context.blend_data.meshes.remove(mesh)
-
-        for material in list(self.context.blend_data.materials):
-            if not self.is_temp_object_name(material.name):
-                continue
-            if material.users:
-                logger.warning(
-                    'Failed to remove "%s" with %d users while removing temp materials',
-                    material.name,
-                    material.users,
-                )
-            else:
-                self.context.blend_data.materials.remove(material)
+        while True:
+            temp_material = next(
+                (
+                    m
+                    for m in self.context.blend_data.materials
+                    if m and m.users <= 1 and self.is_temp_object_name(m.name)
+                ),
+                None,
+            )
+            if not temp_material:
+                break
+            self.context.blend_data.materials.remove(temp_material)
 
         if self.armature is None:
             logger.warning("Failed to read VRM Humanoid")
@@ -1243,17 +1213,17 @@ class AbstractBaseVrmImporter(ABC):
             nodes_key = self.import_id + "Nodes"
             remove_objs: list[Object] = []
             for obj in list(self.context.scene.collection.objects):
-                if isinstance(armature_data := obj.data, Armature):
-                    for bone in armature_data.bones:
+                if isinstance(obj.data, Armature):
+                    for bone in obj.data.bones:
                         if nodes_key in bone:
                             remove_objs.append(obj)
                             break
                     continue
 
-                if isinstance(mesh_data := obj.data, Mesh) and (
-                    nodes_key in mesh_data
-                    or meshes_key in mesh_data
-                    or self.is_temp_object_name(mesh_data.name)
+                if isinstance(obj.data, Mesh) and (
+                    nodes_key in obj.data
+                    or meshes_key in obj.data
+                    or self.is_temp_object_name(obj.data.name)
                 ):
                     remove_objs.append(obj)
                     continue
@@ -1265,8 +1235,18 @@ class AbstractBaseVrmImporter(ABC):
                 ):
                     remove_objs.append(obj)
 
+            bpy.ops.object.select_all(action="DESELECT")
             for obj in remove_objs:
-                safe_removal.remove_object(self.context, obj)
+                obj.select_set(True)
+            bpy.ops.object.delete()
+
+            retry = True
+            while retry:
+                retry = False
+                for obj in self.context.blend_data.objects:
+                    if obj in remove_objs and not obj.users:
+                        retry = True
+                        self.context.blend_data.objects.remove(obj, do_unlink=True)
 
     def temp_object_name(self) -> str:
         self.temp_object_name_count += 1
@@ -1339,9 +1319,6 @@ class AbstractBaseVrmImporter(ABC):
             self.armature.animation_data.action = original_action
 
     def setup_object_selection_and_activation(self) -> None:
-        active_object = self.context.view_layer.objects.active
-        if active_object and active_object.mode != "OBJECT":
-            bpy.ops.object.mode_set(mode="OBJECT")
         if self.imported_object_names is not None:
             bpy.ops.object.select_all(action="DESELECT")
             for obj in self.context.selectable_objects:

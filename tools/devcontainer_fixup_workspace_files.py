@@ -1,9 +1,9 @@
 #!/usr/bin/python3
 # SPDX-License-Identifier: MIT OR GPL-3.0-or-later
-"""Restore the owner and permissions of the devcontainer workspace folder.
+"""devcontainerの作業フォルダの所有者とパーミッションを正しい値に戻す.
 
-This script should be run as root. Since root privileges are too powerful,
-it is executed using only OS packages without going through uv.
+このスクリプトはrootで実行する。rootの権限は強力すぎるため、
+uvは経由せずOSのパッケージのみを用いて実行する。
 """
 
 import functools
@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, NoReturn
 
 import tqdm as type_checking_tqdm
-from pygit2 import Repository
+from dulwich.repo import Repo
 from typing_extensions import TypeAlias
 
 if TYPE_CHECKING:
@@ -69,9 +69,9 @@ def fixup_files(warning_messages: list[str], progress: tqdm) -> None:
     umask = 0o022
     total_progress_count = 0
 
-    # Conditions are unknown, but rarely all file owners become root:root
-    # A warning about "operating on unsafe permission repository" appears, so
-    # set ownership to yourself. Also reset permissions for recursive processing
+    # 発生条件は不明だが、稀にファイルの所有者がすべてroot:rootになることがある
+    # 「Unsafeなパーミッションのレポジトリを操作している」という警告が出るので
+    # 所有権を自分に設定する。また、再帰的に処理ができるようにパーミッションも再設定する
     workspace_path = Path(__file__).parent.parent
     fixup_directory_owner_and_permission(
         workspace_path, warning_messages, uid=uid, gid=gid, umask=umask
@@ -100,23 +100,24 @@ def fixup_files(warning_messages: list[str], progress: tqdm) -> None:
             [(root_path / file_name).absolute() for file_name in file_names]
         )
 
-    # Get path and permission mapping from git repository
+    # gitレポジトリから、パスとそのパーミッションの対応表を得る
     git_index_path_to_mode: dict[Path, int] = {}
-    repo = Repository(str(workspace_path))
-    for index_entry in repo.index:
+    repo = Repo(str(workspace_path))
+    repo_index = repo.open_index()
+    for path_bytes, _sha, mode in repo_index.iterobjects():
         progress.update()
-        path_str = index_entry.path
+        path_str = path_bytes.decode()
         if ".." in path_str:
             continue
         path = Path(path_str)
         if path.is_absolute():
             continue
-        git_index_path_to_mode[path.absolute()] = int(index_entry.mode)
+        git_index_path_to_mode[path.absolute()] = mode
         total_progress_count += 1
 
     progress.reset(total=total_progress_count)
 
-    # Set file permissions as correctly as possible
+    # ファイルのパーミッションを可能な限り正しく設定
     for file_path in all_file_paths:
         progress.update()
 
@@ -130,7 +131,7 @@ def fixup_files(warning_messages: list[str], progress: tqdm) -> None:
             try:
                 os.lchown(file_path, uid, gid)
             except OSError:
-                # On macOS, changing ownership of files under .git folder may fail
+                # macOSでは.gitフォルダ以下のファイルは所有者の変更に失敗することがある
                 dot_git_path = Path(__file__).parent.parent / ".git"
                 if not file_path.is_relative_to(dot_git_path):
                     warning_messages.append(f"Failed to change owner: {file_path}")
@@ -139,7 +140,7 @@ def fixup_files(warning_messages: list[str], progress: tqdm) -> None:
         if stat.S_ISLNK(st.st_mode):
             continue
 
-        # For git-managed files, apply permissions stored in git
+        # git管理対象ファイルは、gitに保存されているパーミッションを反映する
         git_mode = git_index_path_to_mode.pop(file_path.absolute(), None)
         if git_mode is None:
             continue
@@ -153,8 +154,8 @@ def fixup_files(warning_messages: list[str], progress: tqdm) -> None:
         else:
             continue
 
-        # Mask group and other permissions
-        # Fix own permissions and create adjusted permissions
+        # グループと他人のパーミッションはマスク
+        # 自分のパーミッションは固定し、調整後のパーミッションを作成
         max_group_other_permission = (
             (valid_single_permission << 3) | valid_single_permission
         ) & ~umask

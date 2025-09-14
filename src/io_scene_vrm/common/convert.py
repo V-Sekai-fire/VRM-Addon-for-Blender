@@ -5,9 +5,6 @@ from sys import float_info
 from typing import Optional, Union
 
 from . import convert_any
-from .logger import get_logger
-
-logger = get_logger(__name__)
 
 Json = Union[
     None,
@@ -59,16 +56,22 @@ def vrm_json_vector3_to_tuple(
 ) -> Optional[tuple[float, float, float]]:
     if not isinstance(value, Mapping):
         return None
-    x = float_or(value.get("x"), 0.0)
-    y = float_or(value.get("y"), 0.0)
-    z = float_or(value.get("z"), 0.0)
-    return (x, y, z)
+    x = value.get("x")
+    y = value.get("y")
+    z = value.get("z")
+    if not isinstance(x, (int, float)):
+        x = 0
+    if not isinstance(y, (int, float)):
+        y = 0
+    if not isinstance(z, (int, float)):
+        z = 0
+    return (float(x), float(y), float(z))
 
 
 def vrm_json_curve_to_list(curve: Json) -> Optional[list[float]]:
     if not isinstance(curve, list):
         return None
-    values: list[float] = [float_or(v, 0.0) for v in curve]
+    values = [float(v) if isinstance(v, (int, float)) else 0 for v in curve]
     while len(values) < 8:
         values.append(0)
     while len(values) > 8:
@@ -88,8 +91,12 @@ def vrm_json_array_to_float_vector(
             output_values.append(default)
             continue
 
-        input_value = float_or(input_values[index], default)
-        output_values.append(input_value)
+        input_value = input_values[index]
+        if not isinstance(input_value, (int, float)):
+            output_values.append(default)
+            continue
+
+        output_values.append(float(input_value))
 
     return output_values
 
@@ -154,115 +161,95 @@ def get_shading_range_0x(
     return (range_min, range_max)
 
 
-def float_or_none(
-    v: object,
-    min_value: float = -float_info.max,
-    max_value: float = float_info.max,
-) -> Optional[float]:
-    if isinstance(v, float):
-        if math.isnan(v):
-            return None
-        return max(min_value, min(v, max_value))
-
-    if isinstance(v, bool):
-        return 1.0 if v else 0.0
-
+def float_or_none(v: object) -> Optional[float]:
     if isinstance(v, int):
-        return max(min_value, min(float(v), max_value))
-
+        return float(v)
+    if isinstance(v, float):
+        return v
     return None
 
 
-def float_or(
-    v: object,
-    default: float,
-    min_value: float = -float_info.max,
-    max_value: float = float_info.max,
-) -> float:
-    float_or_none_value = float_or_none(v, min_value, max_value)
-    if float_or_none_value is not None:
-        return float_or_none_value
-
-    if min_value <= default <= max_value:
-        return default
-
-    logger.warning(
-        "Default float value %s is out of range [%s, %s]", default, min_value, max_value
-    )
-
-    return max(min_value, min(default, max_value))
+def float_or(v: object, default: float) -> float:
+    if isinstance(v, int):
+        return float(v)
+    if isinstance(v, float):
+        return v
+    return default
 
 
-def float4_or_none(value4: object) -> Optional[tuple[float, float, float, float]]:
-    value4_iterator = iterator_or_none(value4)
-    if value4_iterator is None:
+def float4_or_none(v: object) -> Optional[tuple[float, float, float, float]]:
+    iterator = iterator_or_none(v)
+    if iterator is None:
         return None
 
     result: list[float] = []
-    for value in value4_iterator:
+    for x in iterator:
         if len(result) == 4:
             return None
-        float_value = float_or_none(value)
-        if float_value is None:
+        if isinstance(x, float):
+            result.append(x)
+        elif isinstance(x, int):
+            result.append(float(x))
+        else:
             return None
-        result.append(float_value)
     if len(result) != 4:
         return None
     return (result[0], result[1], result[2], result[3])
 
 
 def float4_or(
-    value4: object, default: tuple[float, float, float, float]
+    v: object, default: tuple[float, float, float, float]
 ) -> tuple[float, float, float, float]:
-    float4 = float4_or_none(value4)
-    return float4 if float4 is not None else default
+    return float4_or_none(v) or default
 
 
-def float3_or_none(value3: object) -> Optional[tuple[float, float, float]]:
-    value3_iterator = iterator_or_none(value3)
-    if value3_iterator is None:
+def float3_or_none(v: object) -> Optional[tuple[float, float, float]]:
+    iterator = iterator_or_none(v)
+    if iterator is None:
         return None
 
     result: list[float] = []
-    for value in value3_iterator:
+    for x in iterator:
         if len(result) == 3:
             return None
-        float_value = float_or_none(value)
-        if float_value is None:
+        if isinstance(x, float):
+            result.append(x)
+        elif isinstance(x, int):
+            result.append(float(x))
+        else:
             return None
-        result.append(float_value)
     if len(result) != 3:
         return None
     return (result[0], result[1], result[2])
 
 
 def float3_or(
-    value3: object, default: tuple[float, float, float]
+    v: object, default: tuple[float, float, float]
 ) -> tuple[float, float, float]:
-    float3 = float3_or_none(value3)
-    return float3 if float3 is not None else default
+    return float3_or_none(v) or default
 
 
-def float2_or_none(value2: object) -> Optional[tuple[float, float]]:
-    value2_iterator = iterator_or_none(value2)
-    if value2_iterator is None:
+def float2_or_none(v: object) -> Optional[tuple[float, float]]:
+    iterator = iterator_or_none(v)
+    if iterator is None:
         return None
     result: list[float] = []
-    for value in value2_iterator:
+    for x in iterator:
         if len(result) == 2:
             return None
-        float_value = float_or_none(value)
-        if float_value is None:
+        if isinstance(x, float):
+            result.append(x)
+        elif isinstance(x, int):
+            result.append(float(x))
+        else:
             return None
-        result.append(float_value)
     if len(result) != 2:
         return None
     return (result[0], result[1])
 
 
-def float2_or(value2: object, default: tuple[float, float]) -> tuple[float, float]:
-    float2 = float2_or_none(value2)
-    return float2 if float2 is not None else default
+def float2_or(v: object, default: tuple[float, float]) -> tuple[float, float]:
+    return float2_or_none(v) or default
 
 
 def str_or(v: object, default: str) -> str:

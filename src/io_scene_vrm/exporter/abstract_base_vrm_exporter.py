@@ -2,20 +2,18 @@
 import secrets
 import string
 from abc import ABC, abstractmethod
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from typing import Optional, Union
 
 import bmesh
 from bpy.types import Armature, Context, Mesh, NodesModifier, Object
-from mathutils import Vector
 
 from ..common import shader
 from ..common.convert import Json
 from ..common.deep import make_json
 from ..common.logger import get_logger
 from ..editor.extension import get_armature_extension, get_material_extension
-from ..editor.property_group import BonePropertyGroup, BonePropertyGroupType
 from ..editor.search import MESH_CONVERTIBLE_OBJECT_TYPES
 from ..external import io_scene_gltf2_support
 
@@ -48,10 +46,10 @@ class AbstractBaseVrmExporter(ABC):
     def export_vrm(self) -> Optional[bytes]:
         pass
 
-    @staticmethod
-    def enter_clear_blend_shape_proxy_previews(
-        armature_data: Armature,
-    ) -> tuple[Sequence[float], Mapping[str, float]]:
+    @contextmanager
+    def clear_blend_shape_proxy_previews(
+        self, armature_data: Armature
+    ) -> Iterator[None]:
         ext = get_armature_extension(armature_data)
 
         saved_vrm0_previews: list[float] = []
@@ -67,90 +65,21 @@ class AbstractBaseVrmExporter(ABC):
             saved_vrm1_previews[name] = expression.preview
             expression.preview = 0
 
-        return saved_vrm0_previews, saved_vrm1_previews
-
-    @staticmethod
-    def leave_clear_blend_shape_proxy_previews(
-        armature_data: Armature,
-        saved_vrm0_previews: Sequence[float],
-        saved_vrm1_previews: Mapping[str, float],
-    ) -> None:
-        ext = get_armature_extension(armature_data)
-
-        for blend_shape_group, blend_shape_preview in zip(
-            ext.vrm0.blend_shape_master.blend_shape_groups, saved_vrm0_previews
-        ):
-            blend_shape_group.preview = blend_shape_preview
-
-        for (
-            name,
-            expression,
-        ) in ext.vrm1.expressions.all_name_to_expression_dict().items():
-            expression_preview = saved_vrm1_previews.get(name)
-            if expression_preview is not None:
-                expression.preview = expression_preview
-
-    @contextmanager
-    def clear_blend_shape_proxy_previews(
-        self, armature_data: Armature
-    ) -> Iterator[None]:
-        saved_vrm0_previews, saved_vrm1_previews = (
-            self.enter_clear_blend_shape_proxy_previews(armature_data)
-        )
         try:
             yield
-            # After yield, native bpy objects may be deleted or frames may advance,
-            # becoming invalid. Accessing them in this state causes crashes, so
-            # be careful not to access potentially invalid native objects after yield
         finally:
-            self.leave_clear_blend_shape_proxy_previews(
-                armature_data, saved_vrm0_previews, saved_vrm1_previews
-            )
-
-    def enter_enable_deform_for_all_referenced_bones(
-        self, armature_data: Armature
-    ) -> list[str]:
-        ext = get_armature_extension(armature_data)
-        modified_non_deform_bone_names = list[str]()
-        for (
-            bone_property_group,
-            bone_property_group_type,
-        ) in BonePropertyGroup.get_all_bone_property_groups(armature_data):
-            bone = armature_data.bones.get(bone_property_group.bone_name)
-            if not bone or bone.use_deform:
-                continue
-            if (
-                ext.is_vrm0()
-                and BonePropertyGroupType.is_vrm0(bone_property_group_type)
-            ) or (
-                ext.is_vrm1()
-                and BonePropertyGroupType.is_vrm1(bone_property_group_type)
+            for blend_shape_group, blend_shape_preview in zip(
+                ext.vrm0.blend_shape_master.blend_shape_groups, saved_vrm0_previews
             ):
-                bone.use_deform = True
-                modified_non_deform_bone_names.append(bone.name)
-        return modified_non_deform_bone_names
+                blend_shape_group.preview = blend_shape_preview
 
-    def leave_enable_deform_for_all_referenced_bones(
-        self, armature_data: Armature, modified_non_deform_bone_names: list[str]
-    ) -> None:
-        for modified_non_deform_bone_name in modified_non_deform_bone_names:
-            bone = armature_data.bones.get(modified_non_deform_bone_name)
-            if bone and bone.use_deform:
-                bone.use_deform = False
-
-    @contextmanager
-    def enable_deform_for_all_referenced_bones(
-        self, armature_data: Armature
-    ) -> Iterator[None]:
-        modified_non_deform_bone_names = (
-            self.enter_enable_deform_for_all_referenced_bones(armature_data)
-        )
-        try:
-            yield
-        finally:
-            self.leave_enable_deform_for_all_referenced_bones(
-                armature_data, modified_non_deform_bone_names
-            )
+            for (
+                name,
+                expression,
+            ) in ext.vrm1.expressions.all_name_to_expression_dict().items():
+                expression_preview = saved_vrm1_previews.get(name)
+                if expression_preview is not None:
+                    expression.preview = expression_preview
 
     @staticmethod
     def enter_hide_mtoon1_outline_geometry_nodes(
@@ -225,9 +154,6 @@ class AbstractBaseVrmExporter(ABC):
         )
         try:
             yield
-            # After yield, native bpy objects may be deleted or frames may advance,
-            # becoming invalid. Accessing them in this state causes crashes, so
-            # be careful not to access potentially invalid native objects after yield
         finally:
             AbstractBaseVrmExporter.exit_hide_mtoon1_outline_geometry_nodes(
                 context, object_name_to_modifier_names
@@ -235,10 +161,10 @@ class AbstractBaseVrmExporter(ABC):
 
     @staticmethod
     def setup_mtoon_gltf_fallback_nodes(context: Context, *, is_vrm0: bool) -> None:
-        """Reflect MToon node values to nodes used for glTF fallback values.
+        """MToonのノードの値を、glTFのフォールバック値に使われるノードに反映する.
 
-        When MToon nodes are directly edited, glTF fallback values are not
-        automatically set. Therefore, we explicitly set values during export.
+        MToonのノードを直接編集した場合、glTFのフォールバック値は自動で設定されない。
+        そのためエクスポート時に明示的に値を設定する。
         """
         for material in context.blend_data.materials:
             mtoon1 = get_material_extension(material).mtoon1
@@ -269,7 +195,7 @@ def assign_dict(
 
 
 def force_apply_modifiers(
-    context: Context, obj: Object, *, preserve_shape_keys: bool
+    context: Context, obj: Object, *, persistent: bool
 ) -> Optional[Mesh]:
     if obj.type not in MESH_CONVERTIBLE_OBJECT_TYPES:
         return None
@@ -277,11 +203,8 @@ def force_apply_modifiers(
     if obj_data is None:
         return None
 
-    if isinstance(obj_data, Mesh):
-        obj_data.calc_loop_triangles()
-
     # https://docs.blender.org/api/2.80/Depsgraph.html
-    # TODO: Shape keys may sometimes break
+    # TODO: シェイプキーが壊れることがあるらしい
     depsgraph = context.evaluated_depsgraph_get()
     evaluated_obj = obj.evaluated_get(depsgraph)
     evaluated_temporary_mesh = evaluated_obj.to_mesh(
@@ -290,8 +213,11 @@ def force_apply_modifiers(
     if not evaluated_temporary_mesh:
         return None
 
-    # The documentation says to use BlendDataMeshes.new_from_object(), but
-    # that doesn't preserve shape keys.
+    if not persistent:
+        return evaluated_temporary_mesh.copy()
+
+    # ドキュメントにはBlendDataMeshes.new_from_object()を使うべきと書いてあるが、
+    # それだとシェイプキーが保持されない。
     if isinstance(obj_data, Mesh):
         evaluated_mesh = obj_data.copy()
     else:
@@ -301,67 +227,10 @@ def force_apply_modifiers(
             obj_data.name,
         )
         evaluated_mesh = context.blend_data.meshes.new(name=obj_data.name)
-
     bm = bmesh.new()
     try:
         bm.from_mesh(evaluated_temporary_mesh)
         bm.to_mesh(evaluated_mesh)
     finally:
         bm.free()
-
-    evaluated_obj.to_mesh_clear()
-
-    if not preserve_shape_keys:
-        return evaluated_mesh
-
-    if not isinstance(obj_data, Mesh):
-        return evaluated_mesh
-
-    shape_keys = obj_data.shape_keys
-    if not shape_keys:
-        return evaluated_mesh
-
-    evaluated_mesh_shape_keys = evaluated_mesh.shape_keys
-    if not evaluated_mesh_shape_keys:
-        return evaluated_mesh
-
-    # If the mesh has shape keys, reproduce them as much as possible
-    for shape_key in shape_keys.key_blocks:
-        evaluated_mesh_shape_key = evaluated_mesh_shape_keys.key_blocks.get(
-            shape_key.name
-        )
-        if not evaluated_mesh_shape_key:
-            continue
-
-        if shape_key.name == shape_keys.reference_key.name:
-            continue
-
-        shape_key.value = 1.0
-        context.view_layer.update()
-
-        depsgraph = context.evaluated_depsgraph_get()
-        baked_shape_key_obj = obj.evaluated_get(depsgraph)
-        baked_shape_key_mesh = baked_shape_key_obj.to_mesh(
-            preserve_all_data_layers=True, depsgraph=depsgraph
-        )
-        if baked_shape_key_mesh:
-            evaluated_mesh_shape_key_data = evaluated_mesh_shape_key.data
-            baked_shape_key_mesh_vertices = baked_shape_key_mesh.vertices
-
-            # TODO: If the number of vertices is different, we should use advanced graph
-            # matching algorithm.
-            for i in range(
-                min(
-                    len(evaluated_mesh_shape_key_data),
-                    len(baked_shape_key_mesh_vertices),
-                )
-            ):
-                evaluated_mesh_shape_key_data[i].co = Vector(
-                    baked_shape_key_mesh_vertices[i].co
-                )
-
-        shape_key.value = 0.0
-        baked_shape_key_obj.to_mesh_clear()
-
-    context.view_layer.update()
     return evaluated_mesh

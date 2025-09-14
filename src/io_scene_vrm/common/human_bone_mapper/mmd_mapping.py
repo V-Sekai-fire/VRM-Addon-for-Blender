@@ -1,7 +1,4 @@
 # SPDX-License-Identifier: MIT OR GPL-3.0-or-later
-from collections.abc import Mapping, Sequence
-from typing import Final
-
 from bpy.types import Object
 
 from ..logger import get_logger
@@ -9,10 +6,8 @@ from ..vrm1.human_bone import HumanBoneSpecification, HumanBoneSpecifications
 
 logger = get_logger(__name__)
 
-# Mapping table for MMD (MikuMikuDance) bone names to VRM human bone specifications.
-# These Japanese bone names are standard MMD naming conventions and should be preserved.
-MMD_BONE_NAME_AND_HUMAN_BONE_SPECIFICATION_PAIRS: Final[
-    Sequence[tuple[str, HumanBoneSpecification]]
+mmd_bone_name_and_human_bone_specification_pairs: list[
+    tuple[str, HumanBoneSpecification]
 ] = [
     ("頭", HumanBoneSpecifications.HEAD),
     ("右目", HumanBoneSpecifications.RIGHT_EYE),
@@ -24,7 +19,6 @@ MMD_BONE_NAME_AND_HUMAN_BONE_SPECIFICATION_PAIRS: Final[
     ("右肩", HumanBoneSpecifications.RIGHT_SHOULDER),
     ("右腕", HumanBoneSpecifications.RIGHT_UPPER_ARM),
     ("右ひじ", HumanBoneSpecifications.RIGHT_LOWER_ARM),
-    ("右手", HumanBoneSpecifications.RIGHT_HAND),
     ("右手首", HumanBoneSpecifications.RIGHT_HAND),
     ("右足", HumanBoneSpecifications.RIGHT_UPPER_LEG),
     ("右ひざ", HumanBoneSpecifications.RIGHT_LOWER_LEG),
@@ -34,7 +28,6 @@ MMD_BONE_NAME_AND_HUMAN_BONE_SPECIFICATION_PAIRS: Final[
     ("左肩", HumanBoneSpecifications.LEFT_SHOULDER),
     ("左腕", HumanBoneSpecifications.LEFT_UPPER_ARM),
     ("左ひじ", HumanBoneSpecifications.LEFT_LOWER_ARM),
-    ("左手", HumanBoneSpecifications.LEFT_HAND),
     ("左手首", HumanBoneSpecifications.LEFT_HAND),
     ("左足", HumanBoneSpecifications.LEFT_UPPER_LEG),
     ("左ひざ", HumanBoneSpecifications.LEFT_LOWER_LEG),
@@ -80,7 +73,7 @@ MMD_BONE_NAME_AND_HUMAN_BONE_SPECIFICATION_PAIRS: Final[
 
 def create_config(
     armature: Object,
-) -> tuple[str, Mapping[str, HumanBoneSpecification]]:
+) -> tuple[str, dict[str, HumanBoneSpecification]]:
     mmd_bone_name_to_bpy_bone_name: dict[str, str] = {}
     for bone in armature.pose.bones:
         # https://github.com/UuuNyaa/blender_mmd_tools/blob/97861e3c32ba423833b6c5fc3432127b1ec1182a/mmd_tools/properties/__init__.py#L45-L46
@@ -99,7 +92,7 @@ def create_config(
     for (
         mmd_bone_name,
         human_bone_specification,
-    ) in MMD_BONE_NAME_AND_HUMAN_BONE_SPECIFICATION_PAIRS:
+    ) in mmd_bone_name_and_human_bone_specification_pairs:
         bpy_bone_name = mmd_bone_name_to_bpy_bone_name.get(mmd_bone_name)
         if not bpy_bone_name:
             continue

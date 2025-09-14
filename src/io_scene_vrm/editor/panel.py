@@ -7,11 +7,9 @@ from bpy.types import (
     AnyType,
     Armature,
     Context,
-    Menu,
     Operator,
     Panel,
     UILayout,
-    UIList,
 )
 
 from ..common import version
@@ -34,7 +32,7 @@ class TemplateListCollectionProtocol(Protocol):
 
 def draw_template_list(
     layout: UILayout,
-    template_list: type[UIList],
+    template_list_idname: str,
     base_object: AnyType,
     collection_attribue_name: str,
     active_index_attribute_name: str,
@@ -46,7 +44,6 @@ def draw_template_list(
     can_remove: Callable[[int], bool] = lambda _: True,
     can_move: Callable[[int], bool] = lambda _: True,
     compact: bool = False,
-    menu: Optional[type[Menu]] = None,
 ) -> tuple[
     list[Union[__AddOperator, __RemoveOperator, __MoveUpOperator, __MoveDownOperator]],
     list[Union[__RemoveOperator, __MoveUpOperator, __MoveDownOperator]],
@@ -82,7 +79,7 @@ def draw_template_list(
 
     list_row = layout.row()
     list_row.template_list(
-        template_list.bl_idname,
+        template_list_idname,
         "",
         base_object,
         collection_attribue_name,
@@ -109,14 +106,10 @@ def draw_template_list(
         translate=False,
     )
 
-    if menu is not None:
-        list_side_column.separator()
-        list_side_column.menu(menu=menu.bl_idname, text="", icon="DOWNARROW_HLT")
-
-    move_operator_parent = list_side_column.column(align=True)
-    # Without separator, the button width changes mysteriously when list elements are 0
-    move_operator_parent.separator()
-    if length <= 1 or not (0 <= active_index < length) or not can_move(active_index):
+    if length >= 2 and 0 <= active_index < length and can_move(active_index):
+        move_operator_parent = list_side_column
+    else:
+        move_operator_parent = list_side_column.column(align=True)
         move_operator_parent.enabled = False
 
     collection_ops: list[
@@ -127,6 +120,7 @@ def draw_template_list(
     ] = [remove_operator]
 
     if length > int(compact):
+        move_operator_parent.separator()
         move_up_operator = layout_operator(
             move_operator_parent,
             move_up_operator_type,
@@ -241,7 +235,7 @@ class VRM_PT_controller(Panel):
         vrm_validator_op = layout_operator(
             layout,
             validation.WM_OT_vrm_validator,
-            text=pgettext("Check VRM Model"),
+            text=pgettext("Check as VRM Model"),
             icon="VIEWZOOM",
         )
         vrm_validator_op.show_successful_message = True

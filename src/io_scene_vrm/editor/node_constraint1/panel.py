@@ -63,25 +63,17 @@ def draw_roll_constraint_layout(
     constraints_help_column = constraints_column.box().column(align=True)
     help_message = pgettext(
         "Conditions exported as Roll Constraint\n"
-        + " - {copy_rotation}\n"
+        + " - Copy Rotation\n"
         + " - Enabled\n"
         + " - No Vertex Group\n"
-        + " - {axis} is one of X, Y and Z\n"
+        + " - Axis is one of X, Y and Z\n"
         + " - No Inverted\n"
-        + " - {mix} is {add}\n"
-        + " - {target} is {local_space}\n"
-        + " - {owner} is {local_space}\n"
+        + " - Mix is Add\n"
+        + " - Target is Local Space\n"
+        + " - Owner is Local Space\n"
         + " - No circular dependencies\n"
         + " - The one at the top of the list of\n"
-        + "   those that meet all the conditions\n",
-    ).format(
-        copy_rotation=pgettext("Copy Rotation"),
-        axis=pgettext("Axis"),
-        mix=pgettext("Mix"),
-        add=pgettext("Add"),
-        target=pgettext("Target"),
-        local_space=pgettext("Local Space"),
-        owner=pgettext("Owner"),
+        + "   those that meet all the conditions\n"
     )
     for index, help_line in enumerate(help_message.splitlines()):
         constraints_help_column.label(
@@ -132,16 +124,13 @@ def draw_aim_constraint_layout(
     constraints_help_column = constraints_column.box().column(align=True)
     help_message = pgettext(
         "Conditions exported as Aim Constraint\n"
-        + " - {damped_track}\n"
+        + " - Damped Track\n"
         + " - Enabled\n"
-        + " - Target Bone {head_tail} is 0\n"
+        + " - Target Bone Head/Tail is 0\n"
         + " - No Follow Target Bone B-Bone\n"
         + " - No circular dependencies\n"
         + " - The one at the top of the list of\n"
         + "   those that meet all the conditions\n"
-    ).format(
-        damped_track=pgettext("Damped Track"),
-        head_tail=pgettext("Head/Tail"),
     )
     for index, help_line in enumerate(help_message.splitlines()):
         constraints_help_column.label(
@@ -192,25 +181,17 @@ def draw_rotation_constraint_layout(
     constraints_help_column = constraints_column.box().column(align=True)
     help_message = pgettext(
         "Conditions exported as Rotation Constraint\n"
-        + " - {copy_rotation}\n"
+        + " - Copy Rotation\n"
         + " - Enabled\n"
         + " - No Vertex Group\n"
-        + " - {axis} is X, Y and Z\n"
+        + " - Axis is X, Y and Z\n"
         + " - No Inverted\n"
-        + " - {mix} is {add}\n"
-        + " - {target} is {local_space}\n"
-        + " - {owner} is {local_space}\n"
+        + " - Mix is Add\n"
+        + " - Target is Local Space\n"
+        + " - Owner is Local Space\n"
         + " - No circular dependencies\n"
         + " - The one at the top of the list of\n"
         + "   those that meet all the conditions\n"
-    ).format(
-        copy_rotation=pgettext("Copy Rotation"),
-        axis=pgettext("Axis"),
-        mix=pgettext("Mix"),
-        add=pgettext("Add"),
-        target=pgettext("Target"),
-        local_space=pgettext("Local Space"),
-        owner=pgettext("Owner"),
     )
     for index, help_line in enumerate(help_message.splitlines()):
         constraints_help_column.label(

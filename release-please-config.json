@@ -1,6 +1,5 @@
 {
-  "last-release-sha": "0d3911f25e3c79e2dca21089198387af0474f049",
-  "bootstrap-sha": "d7535ea50e41dc397d57b2687322f102cc21f49a",
+  "bootstrap-sha": "3fc9ab5f9c27be37568b0ff60732f5928f4e39cd",
   "draft": true,
   "draft-pull-request": true,
   "changelog-sections": [
@@ -14,11 +13,7 @@
     },
     {
       "type": "fix",
-      "section": "🐛 Bug Fixes"
-    },
-    {
-      "type": "perf",
-      "section": "📈 Performance Improvements"
+      "section": "🐞 Bug Fixes"
     },
     {
       "type": "docs",
@@ -36,27 +31,7 @@
         },
         {
           "type": "generic",
-          "path": "tests/common/test_version.py"
-        },
-        {
-          "type": "toml",
-          "path": "pyproject.toml",
-          "jsonpath": "$.project.version"
-        },
-        {
-          "type": "toml",
-          "path": "typings/pyproject.toml",
-          "jsonpath": "$.project.version"
-        },
-        {
-          "type": "toml",
-          "path": "uv.lock",
-          "jsonpath": "$.package[?(@.name.value == 'io-scene-vrm')].version"
-        },
-        {
-          "type": "toml",
-          "path": "uv.lock",
-          "jsonpath": "$.package[?(@.name.value == 'starry-bpy-typings')].version"
+          "path": "tests/test_common.py"
         },
         {
           "type": "toml",

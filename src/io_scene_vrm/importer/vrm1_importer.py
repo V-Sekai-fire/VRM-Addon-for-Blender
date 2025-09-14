@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: MIT OR GPL-3.0-or-later
+import contextlib
 import json
 from typing import Optional, Union
 
@@ -8,7 +9,6 @@ from bpy.types import (
     CopyRotationConstraint,
     DampedTrackConstraint,
     EditBone,
-    Image,
     Mesh,
     Object,
     PoseBone,
@@ -33,6 +33,7 @@ from ..editor.extension import (
     get_material_extension,
     get_object_extension,
 )
+from ..editor.bmesh_encoding.decoding import BmeshDecoder
 from ..editor.make_armature import (
     connect_parent_tail_and_child_head_if_very_close_position,
 )
@@ -62,36 +63,6 @@ logger = get_logger(__name__)
 
 
 class Vrm1Importer(AbstractBaseVrmImporter):
-    @staticmethod
-    def assign_texture_colorspace(image: Image, preferred_colorspace: str) -> None:
-        colorspaces = [preferred_colorspace]
-        if preferred_colorspace == "Non-Color":
-            # https://github.com/saturday06/VRM-Addon-for-Blender/issues/336#issuecomment-1760729404
-            colorspaces.extend(["Linear", "Generic Data"])
-
-        colorspace_settings = image.colorspace_settings
-        exceptions: list[Exception] = []
-        for colorspace in colorspaces:
-            # The values that can be set in colorspace_settings.name vary
-            # depending on the Blender setup. For example, bpy 3.6.0 from pypi
-            # can only choose Linear or sRGB.
-            # To detect this, we would ideally want to reference
-            # colorspace_settings.bl_rna.properties.get("name").enum_items
-            # etc., but it cannot be used because it crashes in Blender 2.93 etc.
-            # So we catch exceptions and try until assignment succeeds.
-            try:
-                colorspace_settings.name = colorspace
-            except TypeError as e:
-                exceptions.append(e)
-            else:
-                return
-
-        logger.error(
-            "image.colorspace_settings.name doesn't support %s:\n%s",
-            colorspaces,
-            "\n".join(map(str, exceptions)),
-        )
-
     def assign_texture(
         self,
         texture: Mtoon1TexturePropertyGroup,
@@ -102,7 +73,19 @@ class Vrm1Importer(AbstractBaseVrmImporter):
             image = self.images.get(source)
             if image:
                 texture.source = image
-                self.assign_texture_colorspace(image, texture.colorspace)
+
+                # https://github.com/saturday06/VRM-Addon-for-Blender/issues/336#issuecomment-1760729404
+                colorspace_settings = image.colorspace_settings
+                try:
+                    colorspace_settings.name = texture.colorspace
+                except TypeError:
+                    logger.exception(
+                        "image.colorspace_settings.name doesn't support %s",
+                        texture.colorspace,
+                    )
+                    if texture.colorspace == "Non-Color":
+                        with contextlib.suppress(TypeError):
+                            colorspace_settings.name = "Generic Data"
 
         sampler = texture_dict.get("sampler")
         samplers = self.parse_result.json_dict.get("samplers")
@@ -229,10 +212,7 @@ class Vrm1Importer(AbstractBaseVrmImporter):
                 )
 
         alpha_mode = gltf_dict.get("alphaMode")
-        if (
-            isinstance(alpha_mode, str)
-            and alpha_mode in gltf.alpha_mode_enum.identifiers()
-        ):
+        if alpha_mode in gltf.alpha_mode_enum.identifiers():
             gltf.alpha_mode = alpha_mode
 
         alpha_cutoff = gltf_dict.get("alphaCutoff")
@@ -263,16 +243,6 @@ class Vrm1Importer(AbstractBaseVrmImporter):
                 gltf.emissive_texture,
                 emissive_texture_dict,
             )
-
-        emissive_strength_dict = extensions_dict.get("KHR_materials_emissive_strength")
-        if isinstance(emissive_strength_dict, dict):
-            emissive_strength = convert.float_or_none(
-                emissive_strength_dict.get("emissiveStrength")
-            )
-            if emissive_strength is not None:
-                gltf.extensions.khr_materials_emissive_strength.emissive_strength = (
-                    emissive_strength
-                )
 
         shade_color_factor = shader.rgb_or_none(mtoon_dict.get("shadeColorFactor"))
         if shade_color_factor:
@@ -428,6 +398,58 @@ class Vrm1Importer(AbstractBaseVrmImporter):
             progress.update(float(index) / len(material_dicts))
         progress.update(1)
 
+    def load_ext_bmesh_encoding(self) -> None:
+        """Process meshes with EXT_bmesh_encoding extension data."""
+        meshes_dict = self.parse_result.json_dict.get("meshes")
+        if not isinstance(meshes_dict, list):
+            return
+
+        decoder = BmeshDecoder()
+        
+        for mesh_index, mesh_dict in enumerate(meshes_dict):
+            if not isinstance(mesh_dict, dict):
+                continue
+                
+            primitives = mesh_dict.get("primitives")
+            if not isinstance(primitives, list):
+                continue
+                
+            for primitive_index, primitive_dict in enumerate(primitives):
+                if not isinstance(primitive_dict, dict):
+                    continue
+                    
+                # Check if this primitive has EXT_bmesh_encoding
+                if not decoder.detect_extension_in_primitive(primitive_dict):
+                    continue
+                    
+                logger.info(f"Processing EXT_bmesh_encoding for mesh {mesh_index}, primitive {primitive_index}")
+                
+                # Extract extension data
+                extension_data = decoder.extract_extension_data(primitive_dict)
+                if not extension_data:
+                    continue
+                    
+                # Find the corresponding Blender mesh object
+                mesh_obj = self.meshes.get(mesh_index)
+                if not mesh_obj or not mesh_obj.data:
+                    logger.warning(f"Could not find mesh object for mesh {mesh_index}")
+                    continue
+                    
+                # Decode BMesh topology - pass parse_result for buffer access
+                reconstructed_bmesh = decoder.decode_gltf_extension_to_bmesh(extension_data, self.parse_result)
+                if not reconstructed_bmesh:
+                    logger.warning(f"Failed to decode EXT_bmesh_encoding for mesh {mesh_index}")
+                    continue
+                    
+                # Apply BMesh topology to Blender mesh
+                if decoder.apply_bmesh_to_blender_mesh(reconstructed_bmesh, mesh_obj.data):
+                    logger.info(f"Successfully applied EXT_bmesh_encoding topology to mesh {mesh_index}")
+                else:
+                    logger.warning(f"Failed to apply BMesh topology to mesh {mesh_index}")
+                    
+                # Clean up BMesh
+                reconstructed_bmesh.free()
+
     def find_vrm1_bone_node_indices(self) -> list[int]:
         result: list[int] = []
 
@@ -543,21 +565,20 @@ class Vrm1Importer(AbstractBaseVrmImporter):
                     human_bone_name
                 )
 
-            # When a bone has multiple children
-            # Create a dict to pick the child bone name to point the tail to
-            # from that bone name
+            # ボーンの子が複数ある場合
+            # そのボーン名からテールを向ける先の子ボーン名を拾えるdictを作る
             bone_name_to_main_child_bone_name: dict[str, str] = {}
             for (
                 bone_name,
                 human_bone_name,
             ) in bone_name_to_human_bone_name.items():
-                # The current algorithm cannot handle
+                # 現在のアルゴリズムでは
                 #
                 #   head ---- node ---- leftEye
                 #                   \
                 #                    -- rightEye
                 #
-                # well, so we don't process leftEye and rightEye
+                # を上手く扱えないので、leftEyeとrightEyeは処理しない
                 if human_bone_name in [HumanBoneName.RIGHT_EYE, HumanBoneName.LEFT_EYE]:
                     continue
 
@@ -621,7 +642,7 @@ class Vrm1Importer(AbstractBaseVrmImporter):
                     bone_name_to_main_child_bone_name[parent.name] = bone.name
                     bone = parent
 
-            # Get human bones and their ancestor bones
+            # ヒューマンボーンとその先祖ボーンを得る
             human_bone_tree_bone_names: set[str] = set()
             for bone_name in bone_name_to_human_bone_name:
                 bone = armature_data.edit_bones.get(bone_name)
@@ -702,10 +723,9 @@ class Vrm1Importer(AbstractBaseVrmImporter):
                 if not found:
                     constraint_node_index_groups.append({node_index, source_index})
 
-            # When constraints are attached during axis conversion, we want to
-            # prioritize human bones and their ancestor bones, so we process
-            # them first in depth-first order, then process other bones in
-            # depth-first order
+            # 軸変換時コンストレイントがついている場合にヒューマンボーンと
+            # その先祖ボーンを優先したいので、それらを深さ優先で先に処理し、
+            # その後その他のボーンを深さ優先で処理する
             unsorted_bones = [
                 bone for bone in armature_data.edit_bones if not bone.parent
             ]
@@ -938,6 +958,9 @@ class Vrm1Importer(AbstractBaseVrmImporter):
                 addon_extension.spring_bone1, extensions_dict.get("VRMC_springBone")
             )
 
+        # Process EXT_bmesh_encoding mesh topology data
+        self.load_ext_bmesh_encoding()
+
         self.load_node_constraint1()
         migration.migrate(self.context, armature.name)
 
@@ -1064,7 +1087,7 @@ class Vrm1Importer(AbstractBaseVrmImporter):
             bone_name = self.bone_names.get(node_index)
             if not isinstance(bone_name, str) or bone_name in assigned_bone_names:
                 continue
-            human_bone_name_to_human_bone[human_bone_name].node.bone_name = bone_name
+            human_bone_name_to_human_bone[human_bone_name].node.set_bone_name(bone_name)
             assigned_bone_names.append(bone_name)
 
     def load_vrm1_first_person(
@@ -1176,7 +1199,9 @@ class Vrm1Importer(AbstractBaseVrmImporter):
 
             morph_target_bind = expression.morph_target_binds.add()
 
-            weight = convert.float_or(morph_target_bind_dict.get("weight"), 0.0)
+            weight = morph_target_bind_dict.get("weight")
+            if not isinstance(weight, (int, float)):
+                weight = 0
 
             morph_target_bind.weight = weight
 
@@ -1326,10 +1351,9 @@ class Vrm1Importer(AbstractBaseVrmImporter):
         if isinstance(node_index, int):
             bone_name = self.bone_names.get(node_index)
             if isinstance(bone_name, str):
-                collider.node.bone_name = bone_name
-                collider_bpy_object = collider.bpy_object
-                if collider_bpy_object:
-                    collider_bpy_object.name = f"{bone_name} Collider"
+                collider.node.set_bone_name(bone_name)
+                if collider.bpy_object:
+                    collider.bpy_object.name = f"{bone_name} Collider"
                 bone = self.armature_data.bones.get(collider.node.bone_name)
 
         shape_dict = collider_dict.get("shape")
@@ -1502,10 +1526,9 @@ class Vrm1Importer(AbstractBaseVrmImporter):
                 )
             extended_shape.plane.normal = normal
 
-            collider_bpy_object = collider.bpy_object
-            if collider_bpy_object:
-                # Override the fallback collider values with fixed values when loading
-                collider_bpy_object.empty_display_size = 0.125
+            if collider.bpy_object:
+                # フォールバックのコライダーをロードする際に入った値を固定値で上書きする
+                collider.bpy_object.empty_display_size = 0.125
 
         else:
             return
@@ -1524,11 +1547,11 @@ class Vrm1Importer(AbstractBaseVrmImporter):
             collider_dicts = []
 
         for collider_dict in collider_dicts:
-            # Since the reference from ColliderGroup to Collider is by index,
-            # create empty data even if the contents of collider_dict are invalid
-            if ops.vrm.add_spring_bone1_collider(
-                armature_object_name=armature.name
-            ) != {"FINISHED"}:
+            # ColliderGroupからColliderへの参照はindexでの参照のため、
+            # collider_dictの中身が不正でも空のデータは作成しておく
+            if ops.vrm.add_spring_bone1_collider(armature_name=armature.name) != {
+                "FINISHED"
+            }:
                 message = f'Failed to add spring bone 1.0 collider to "{armature.name}"'
                 raise ValueError(message)
 
@@ -1549,14 +1572,13 @@ class Vrm1Importer(AbstractBaseVrmImporter):
             colliders_collection = self.context.blend_data.collections.new("Colliders")
             self.context.scene.collection.children.link(colliders_collection)
             for collider in spring_bone.colliders:
-                collider_bpy_object = collider.bpy_object
-                if not collider_bpy_object:
+                if not collider.bpy_object:
                     continue
-                colliders_collection.objects.link(collider_bpy_object)
-                collider_object_names.append(collider_bpy_object.name)
-                if collider_bpy_object.name in self.context.scene.collection.objects:
-                    self.context.scene.collection.objects.unlink(collider_bpy_object)
-                for child in collider_bpy_object.children:
+                colliders_collection.objects.link(collider.bpy_object)
+                collider_object_names.append(collider.bpy_object.name)
+                if collider.bpy_object.name in self.context.scene.collection.objects:
+                    self.context.scene.collection.objects.unlink(collider.bpy_object)
+                for child in collider.bpy_object.children:
                     collider_object_names.append(child.name)
                     colliders_collection.objects.link(child)
                     if child.name in self.context.scene.collection.objects:
@@ -1575,7 +1597,7 @@ class Vrm1Importer(AbstractBaseVrmImporter):
         self,
         spring_bone: SpringBone1SpringBonePropertyGroup,
         spring_bone_dict: dict[str, Json],
-        armature_object_name: str,
+        armature_name: str,
     ) -> None:
         collider_group_dicts = spring_bone_dict.get("colliderGroups")
         if not isinstance(collider_group_dicts, list):
@@ -1584,14 +1606,13 @@ class Vrm1Importer(AbstractBaseVrmImporter):
         for collider_group_index, collider_group_dict in enumerate(
             collider_group_dicts
         ):
-            # Since the reference from Spring to ColliderGroup is by index,
-            # create empty data even if the contents of collider_group_dict are invalid
-            if ops.vrm.add_spring_bone1_collider_group(
-                armature_object_name=armature_object_name
-            ) != {"FINISHED"}:
+            # SpringからColliderGroupへの参照はindexでの参照のため、
+            # collider_group_dictの中身が不正でも空のデータは作成しておく
+            if ops.vrm.add_spring_bone1_collider_group(armature_name=armature_name) != {
+                "FINISHED"
+            }:
                 message = (
-                    "Failed to add spring bone 1.0 collider group"
-                    + f" to {armature_object_name}"
+                    f"Failed to add spring bone 1.0 collider group to {armature_name}"
                 )
                 raise ValueError(message)
 
@@ -1610,12 +1631,12 @@ class Vrm1Importer(AbstractBaseVrmImporter):
 
             for collider_index in collider_indices:
                 if ops.vrm.add_spring_bone1_collider_group_collider(
-                    armature_object_name=armature_object_name,
+                    armature_name=armature_name,
                     collider_group_index=collider_group_index,
                 ) != {"FINISHED"}:
                     raise ValueError(
                         "Failed to assign spring bone 1.0 collider to collider group "
-                        + f"{collider_group_index} in {armature_object_name}"
+                        + f"{collider_group_index} in {armature_name}"
                     )
                 if not isinstance(collider_index, int):
                     continue
@@ -1633,16 +1654,16 @@ class Vrm1Importer(AbstractBaseVrmImporter):
         self,
         spring_bone: SpringBone1SpringBonePropertyGroup,
         spring_bone_dict: dict[str, Json],
-        armature_object_name: str,
+        armature_name: str,
     ) -> None:
         spring_dicts = spring_bone_dict.get("springs")
         if not isinstance(spring_dicts, list):
             spring_dicts = []
 
         for spring_dict in spring_dicts:
-            if ops.vrm.add_spring_bone1_spring(
-                armature_object_name=armature_object_name
-            ) != {"FINISHED"} or not isinstance(spring_dict, dict):
+            if ops.vrm.add_spring_bone1_spring(armature_name=armature_name) != {
+                "FINISHED"
+            } or not isinstance(spring_dict, dict):
                 continue
 
             spring = spring_bone.springs[-1]
@@ -1655,14 +1676,14 @@ class Vrm1Importer(AbstractBaseVrmImporter):
             if isinstance(center_index, int):
                 bone_name = self.bone_names.get(center_index)
                 if bone_name:
-                    spring.center.bone_name = bone_name
+                    spring.center.set_bone_name(bone_name)
 
             joint_dicts = spring_dict.get("joints")
             if not isinstance(joint_dicts, list):
                 joint_dicts = []
             for joint_dict in joint_dicts:
                 if ops.vrm.add_spring_bone1_spring_joint(
-                    armature_object_name=armature_object_name,
+                    armature_name=armature_name,
                     spring_index=len(spring_bone.springs) - 1,
                 ) != {"FINISHED"}:
                     continue
@@ -1675,18 +1696,18 @@ class Vrm1Importer(AbstractBaseVrmImporter):
                 if isinstance(node_index, int):
                     bone_name = self.bone_names.get(node_index)
                     if bone_name:
-                        joint.node.bone_name = bone_name
+                        joint.node.set_bone_name(bone_name)
 
-                hit_radius = convert.float_or_none(joint_dict.get("hitRadius"))
-                if hit_radius is not None:
+                hit_radius = joint_dict.get("hitRadius")
+                if isinstance(hit_radius, (int, float)):
                     joint.hit_radius = hit_radius
 
-                stiffness = convert.float_or_none(joint_dict.get("stiffness"))
-                if stiffness is not None:
+                stiffness = joint_dict.get("stiffness")
+                if isinstance(stiffness, (int, float)):
                     joint.stiffness = stiffness
 
-                gravity_power = convert.float_or_none(joint_dict.get("gravityPower"))
-                if gravity_power is not None:
+                gravity_power = joint_dict.get("gravityPower")
+                if isinstance(gravity_power, (int, float)):
                     joint.gravity_power = gravity_power
 
                 gltf_axis_gravity_dir = convert.vrm_json_array_to_float_vector(
@@ -1699,8 +1720,8 @@ class Vrm1Importer(AbstractBaseVrmImporter):
                     gltf_axis_gravity_dir[1],
                 ]
 
-                drag_force = convert.float_or_none(joint_dict.get("dragForce"))
-                if drag_force is not None:
+                drag_force = joint_dict.get("dragForce")
+                if isinstance(drag_force, (int, float)):
                     joint.drag_force = drag_force
             spring.active_joint_index = 0
 
@@ -1709,7 +1730,7 @@ class Vrm1Importer(AbstractBaseVrmImporter):
                 collider_group_indices = []
             for collider_group_index in collider_group_indices:
                 if ops.vrm.add_spring_bone1_spring_collider_group(
-                    armature_object_name=armature_object_name,
+                    armature_name=armature_name,
                     spring_index=len(spring_bone.springs) - 1,
                 ) != {"FINISHED"}:
                     continue
@@ -1825,8 +1846,8 @@ class Vrm1Importer(AbstractBaseVrmImporter):
                     constraint.use_y = True
                 elif roll_axis == "Z":
                     constraint.use_z = True
-                weight = convert.float_or_none(roll_dict.get("weight"))
-                if weight is not None:
+                weight = roll_dict.get("weight")
+                if isinstance(weight, (int, float)):
                     constraint.influence = weight
                 source_index = roll_dict.get("source")
             elif isinstance(aim_dict, dict):
@@ -1844,8 +1865,8 @@ class Vrm1Importer(AbstractBaseVrmImporter):
                     track_axis = convert.VRM_AIM_AXIS_TO_BPY_TRACK_AXIS.get(aim_axis)
                     if track_axis:
                         constraint.track_axis = track_axis
-                weight = convert.float_or_none(aim_dict.get("weight"))
-                if weight is not None:
+                weight = aim_dict.get("weight")
+                if isinstance(weight, (int, float)):
                     constraint.influence = weight
                 source_index = aim_dict.get("source")
             elif isinstance(rotation_dict, dict):
@@ -1859,11 +1880,18 @@ class Vrm1Importer(AbstractBaseVrmImporter):
                 constraint.use_x = True
                 constraint.use_y = True
                 constraint.use_z = True
-                weight = convert.float_or_none(rotation_dict.get("weight"))
-                if weight is not None:
+                weight = rotation_dict.get("weight")
+                if isinstance(weight, (int, float)):
                     constraint.influence = weight
                 source_index = rotation_dict.get("source")
             else:
+                continue
+
+            # TODO: mypyが賢くなったら消す
+            if not isinstance(  # pyright: ignore [reportUnnecessaryIsInstance]
+                constraint,
+                (CopyRotationConstraint, DampedTrackConstraint),
+            ):
                 continue
 
             if isinstance(source_index, int):

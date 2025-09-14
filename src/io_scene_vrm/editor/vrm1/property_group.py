@@ -31,7 +31,6 @@ from bpy.types import (
 )
 from mathutils import Matrix, Quaternion, Vector
 
-from ...common import convert
 from ...common.char import DISABLE_TRANSLATION
 from ...common.logger import get_logger
 from ...common.rotation import set_rotation_without_mode_change
@@ -71,16 +70,14 @@ class Vrm1HumanBonePropertyGroup(PropertyGroup):
         armature_data: Armature,
         target: HumanBoneSpecification,
         bpy_bone_name_to_human_bone_specification: dict[str, HumanBoneSpecification],
-        error_bpy_bone_names: Sequence[str],
-    ) -> bool:
+    ) -> None:
         new_candidates = BonePropertyGroup.find_bone_candidates(
             armature_data,
             target,
             bpy_bone_name_to_human_bone_specification,
-            error_bpy_bone_names,
         )
         if {n.value for n in self.node_candidates} == new_candidates:
-            return False
+            return
 
         self.node_candidates.clear()
         # Preserving list order
@@ -89,8 +86,6 @@ class Vrm1HumanBonePropertyGroup(PropertyGroup):
                 continue
             candidate = self.node_candidates.add()
             candidate.value = bone_name
-
-        return True
 
     if TYPE_CHECKING:
         # This code is auto generated.
@@ -270,7 +265,9 @@ class Vrm1HumanBonesPropertyGroup(PropertyGroup):
     )
 
     # for UI
-    last_bone_names_str: StringProperty()  # type: ignore[valid-type]
+    last_bone_names: CollectionProperty(  # type: ignore[valid-type]
+        type=StringPropertyGroup
+    )
     initial_automatic_bone_assignment: BoolProperty(  # type: ignore[valid-type]
         default=True
     )
@@ -349,9 +346,9 @@ class Vrm1HumanBonesPropertyGroup(PropertyGroup):
             if not human_bone.node.bone_name:
                 if specification.requirement:
                     messages.append(
-                        pgettext(
-                            'Please assign Required VRM Human Bone "{name}".'
-                        ).format(name=specification.title)
+                        pgettext('Please assign Required VRM Bone "{name}".').format(
+                            name=specification.title
+                        )
                     )
                 continue
             if not specification.parent_requirement:
@@ -386,12 +383,16 @@ class Vrm1HumanBonesPropertyGroup(PropertyGroup):
     @staticmethod
     def fixup_human_bones(obj: Object) -> None:
         armature_data = obj.data
-        if obj.type != "ARMATURE" or not isinstance(armature_data, Armature):
+        if (
+            obj.type != "ARMATURE"
+            or not isinstance(armature_data, Armature)
+            or not hasattr(armature_data, "vrm_addon_extension")
+        ):
             return
 
         human_bones = get_armature_vrm1_extension(armature_data).humanoid.human_bones
 
-        # If the same Blender bone is set in multiple bone maps, delete one of them
+        # 複数のボーンマップに同一のBlenderのボーンが設定されていたら片方を削除
         fixup = True
         while fixup:
             fixup = False
@@ -402,7 +403,7 @@ class Vrm1HumanBonesPropertyGroup(PropertyGroup):
                 if human_bone.node.bone_name not in found_node_bone_names:
                     found_node_bone_names.append(human_bone.node.bone_name)
                     continue
-                human_bone.node.bone_name = ""
+                human_bone.node.set_bone_name(None)
                 fixup = True
                 break
 
@@ -424,9 +425,8 @@ class Vrm1HumanBonesPropertyGroup(PropertyGroup):
     def update_all_node_candidates_timer_callback(
         armature_object_name: str, *, force: bool = False
     ) -> None:
-        """Wrap to match the type of update_all_node_candidates() to timers.register."""
-        # Context cannot be passed across frames, so get a new one
-        context = bpy.context
+        """update_all_node_candidates()の型をbpy.app.timers.registerに合わせるためのラッパー."""
+        context = bpy.context  # Contextはフレームを跨げないので新たに取得する
         Vrm1HumanBonesPropertyGroup.update_all_node_candidates(
             context, armature_object_name, force=force
         )
@@ -444,20 +444,39 @@ class Vrm1HumanBonesPropertyGroup(PropertyGroup):
         if not isinstance(armature_data, Armature):
             return
         human_bones = get_armature_vrm1_extension(armature_data).humanoid.human_bones
-
-        bone_names_str = "\n".join(
-            bone.name + "\n" + (parent.name if (parent := bone.parent) else "")
-            for bone in sorted(armature_data.bones.values(), key=lambda b: b.name)
-        )
+        bone_names: list[str] = []
+        for bone in sorted(armature_data.bones.values(), key=lambda b: str(b.name)):
+            bone_names.append(bone.name)
+            bone_names.append(bone.parent.name if bone.parent else "")
 
         if not force:
-            up_to_date = bone_names_str == human_bones.last_bone_names_str
+            up_to_date = bone_names == [
+                str(n.value) for n in human_bones.last_bone_names
+            ]
             if up_to_date:
                 return
 
-        human_bones.last_bone_names_str = bone_names_str
+        human_bones.last_bone_names.clear()
+        for bone_name in bone_names:
+            last_bone_name = human_bones.last_bone_names.add()
+            last_bone_name.value = bone_name
 
-        BonePropertyGroup.update_all_vrm1_node_candidates(armature_data)
+        human_bone_name_to_human_bone = human_bones.human_bone_name_to_human_bone()
+        bpy_bone_name_to_human_bone_specification: dict[str, HumanBoneSpecification] = {
+            human_bone.node.bone_name: HumanBoneSpecifications.get(human_bone_name)
+            for human_bone_name, human_bone in human_bone_name_to_human_bone.items()
+            if human_bone.node.bone_name
+        }
+
+        for (
+            human_bone_name,
+            human_bone,
+        ) in human_bone_name_to_human_bone.items():
+            human_bone.update_node_candidates(
+                armature_data,
+                HumanBoneSpecifications.get(human_bone_name),
+                bpy_bone_name_to_human_bone_specification,
+            )
 
     if TYPE_CHECKING:
         # This code is auto generated.
@@ -517,7 +536,9 @@ class Vrm1HumanBonesPropertyGroup(PropertyGroup):
         right_little_proximal: Vrm1HumanBonePropertyGroup  # type: ignore[no-redef]
         right_little_intermediate: Vrm1HumanBonePropertyGroup  # type: ignore[no-redef]
         right_little_distal: Vrm1HumanBonePropertyGroup  # type: ignore[no-redef]
-        last_bone_names_str: str  # type: ignore[no-redef]
+        last_bone_names: CollectionPropertyProtocol[  # type: ignore[no-redef]
+            StringPropertyGroup
+        ]
         initial_automatic_bone_assignment: bool  # type: ignore[no-redef]
         allow_non_humanoid_rig: bool  # type: ignore[no-redef]
 
@@ -1121,9 +1142,19 @@ class Vrm1ExpressionPropertyGroup(PropertyGroup):
             logger.debug("Unnamed expression: %s", type(triggered_expression))
             return
 
-        armature = triggered_expression.id_data
-        if not isinstance(armature, Armature):
-            # This is getting triggered after importing VRMA files
+        armature: Optional[Armature] = None
+        for search_armature in context.blend_data.armatures:
+            ext = get_armature_vrm1_extension(search_armature)
+            if (
+                triggered_expression
+                == ext.expressions.all_name_to_expression_dict().get(
+                    triggered_expression.name
+                )
+            ):
+                armature = search_armature
+                break
+
+        if not armature:  # This is getting triggered after importing VRMA files
             logger.error("No armature for %s", triggered_expression.name)
             return
 
@@ -1259,9 +1290,8 @@ class Vrm1ExpressionPropertyGroup(PropertyGroup):
         name="Texture Transform Binds"
     )
 
-    # Since the value of the shape key can only be changed in
-    # frame_change_pre/frame_change_post during animation playback, the
-    # changed value is saved here.
+    # アニメーション再生中はframe_change_pre/frame_change_postでしかシェイプキーの値の
+    # 変更ができないので、変更された値をここに保存しておく
     frame_change_post_shape_key_updates: ClassVar[dict[tuple[str, str], float]] = {}
 
     def get_preview(self) -> float:
@@ -1270,21 +1300,28 @@ class Vrm1ExpressionPropertyGroup(PropertyGroup):
             return float(value)
         return 0.0
 
-    def set_preview(self, value_obj: object) -> None:
+    def find_armature(self, context: Context) -> Armature:
+        for armature in context.blend_data.armatures:
+            ext = get_armature_vrm1_extension(armature)
+            ext.expressions.all_name_to_expression_dict()
+
+        message = f"No armature extension for {self.name}"
+        raise ValueError(message)
+
+    def set_preview(self, value: object) -> None:
         context = bpy.context
 
-        value = convert.float_or_none(value_obj)
-        if value is None:
+        if not isinstance(value, (int, float)):
             return
 
-        current_value = convert.float_or_none(self.get("preview"))
+        current_value = self.get("preview")
         if (
-            current_value is not None
+            isinstance(current_value, (int, float))
             and abs(current_value - value) < float_info.epsilon
         ):
             return
 
-        self["preview"] = value
+        self["preview"] = float(value)
         Vrm1ExpressionPropertyGroup.update_preview(self, context)
 
     preview: FloatProperty(  # type: ignore[valid-type]
@@ -1302,10 +1339,7 @@ class Vrm1ExpressionPropertyGroup(PropertyGroup):
             ext = get_armature_vrm1_extension(armature)
             expressions = ext.expressions
             for expression in expressions.all_name_to_expression_dict().values():
-                materials_to_update = expression.materials_to_update
-                if not materials_to_update:
-                    continue
-                for material_property_group in materials_to_update:
+                for material_property_group in expression.materials_to_update:
                     material = material_property_group.material
                     if not material:
                         continue
@@ -1313,11 +1347,10 @@ class Vrm1ExpressionPropertyGroup(PropertyGroup):
                     if not node_tree:
                         continue
 
-                    # The update() method exists in the documentation, but
-                    # the call fails
+                    # update()メソッドはドキュメントには存在するが、呼び出し失敗する
                     # https://docs.blender.org/api/4.2/bpy.types.NodeTree.html#bpy.types.NodeTree.update
                     # node_tree.update()
-                materials_to_update.clear()
+                expression.materials_to_update.clear()
 
     active_morph_target_bind_index: IntProperty(min=0)  # type: ignore[valid-type]
     active_material_color_bind_index: IntProperty(min=0)  # type: ignore[valid-type]
@@ -1357,15 +1390,25 @@ class Vrm1CustomExpressionPropertyGroup(Vrm1ExpressionPropertyGroup):
         return str(self.get("custom_name", ""))
 
     def set_custom_name(self, value: str) -> None:
+        context = bpy.context
+
         if not value or self.get("custom_name") == value:
             return
 
-        armature_data = self.id_data
-        if not isinstance(armature_data, Armature):
-            logger.error("No armature for %s", self)
+        vrm1: Optional[Vrm1PropertyGroup] = None
+        for search_armature in context.blend_data.armatures:
+            for custom_expression in get_armature_vrm1_extension(
+                search_armature
+            ).expressions.custom:
+                if custom_expression != self:
+                    continue
+                vrm1 = get_armature_vrm1_extension(search_armature)
+                break
+        if vrm1 is None:
+            logger.error("No armature extension for %s", self)
             return
 
-        expressions = get_armature_vrm1_extension(armature_data).expressions
+        expressions = vrm1.expressions
         all_expression_names = expressions.all_name_to_expression_dict().keys()
         custom_name = value
         for index in range(sys.maxsize):
@@ -1620,19 +1663,11 @@ class Vrm1ExpressionsPropertyGroup(PropertyGroup):
             result[custom_expression.custom_name] = custom_expression
         return result
 
-    # An empty element is held for the number of expressions for UIList
-    # display of expressions
+    # expressionのUIList表示のため、expressionの数だけ空の要素を持つ
     expression_ui_list_elements: CollectionProperty(  # type: ignore[valid-type]
         type=StringPropertyGroup
     )
     active_expression_ui_list_element_index: IntProperty(min=0)  # type: ignore[valid-type]
-
-    def restore_expression_morph_target_bind_object_assignments(
-        self, context: Context
-    ) -> None:
-        for expression in self.all_name_to_expression_dict().values():
-            for morph_target_bind in expression.morph_target_binds:
-                morph_target_bind.node.restore_object_assignment(context)
 
     if TYPE_CHECKING:
         # This code is auto generated.
