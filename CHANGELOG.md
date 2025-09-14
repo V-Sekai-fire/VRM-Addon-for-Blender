@@ -1,5 +1,30 @@
 # Changelog
 
+## [3.14.0](https://github.com/V-Sekai-fire/VRM-Addon-for-Blender/compare/v3.13.3...v3.14.0) (2025-09-14)
+
+
+### 🚀 Features
+
+* support vrm0 legacy unlit shaders ([ae0ce39](https://github.com/V-Sekai-fire/VRM-Addon-for-Blender/commit/ae0ce39547ca94e47822203a069ee9680804a704))
+
+
+### 🐛 Bug Fixes
+
+* fix a bug that _ALPHABLEND_ON is incorrectly enabled in Blender 4.2 and later ([a9d21b4](https://github.com/V-Sekai-fire/VRM-Addon-for-Blender/commit/a9d21b41f92eda5fc40b8168bde5dbe591c56389))
+* fix a bug that invisible modifiers would become visible on VRM import ([52e583c](https://github.com/V-Sekai-fire/VRM-Addon-for-Blender/commit/52e583caf465a95f688096ca895b001a35d88956))
+* fix an issue where VRM0 morph target names were not displayed in some applications ([9c956b8](https://github.com/V-Sekai-fire/VRM-Addon-for-Blender/commit/9c956b89235427a78c3e8d5353943ba26c24c4b0))
+* fix export error on Blender 2.93 ([10d3a57](https://github.com/V-Sekai-fire/VRM-Addon-for-Blender/commit/10d3a57bf86aaade94ae01d2f66901225350a4f6))
+* fix export error when vertex weights are in certain situations ([53775d7](https://github.com/V-Sekai-fire/VRM-Addon-for-Blender/commit/53775d78c1798fc6dfedd0fb05057e18f4e8e738))
+* fix resource leak on import VRM ([b6caea7](https://github.com/V-Sekai-fire/VRM-Addon-for-Blender/commit/b6caea7ae275b15c3a7f23e562f4a524e3716c6b))
+* fixed a bug where referenced Non-Deform bones were not exported ([e725b50](https://github.com/V-Sekai-fire/VRM-Addon-for-Blender/commit/e725b502e1f0df78bdd4a4b5ceddfdb2539cb90a))
+* fixed an issue where temporary armature might remain after VRM export ([fe9fc0e](https://github.com/V-Sekai-fire/VRM-Addon-for-Blender/commit/fe9fc0e950d6204c7277bedc237ab662d42e869b))
+* slightly reduces performance issues with the list view in Blender 4.5. ([cb70239](https://github.com/V-Sekai-fire/VRM-Addon-for-Blender/commit/cb7023981c0268ef5b56254d9732d82424866f6e))
+* trigger release pipeline ([2ec0e8e](https://github.com/V-Sekai-fire/VRM-Addon-for-Blender/commit/2ec0e8eff6098c29eaecb1eb969ac767543a79eb))
+* trigger release pipeline ([05a6733](https://github.com/V-Sekai-fire/VRM-Addon-for-Blender/commit/05a6733ecfe76500ba005a9f7451c6e3f2d6d691))
+* trigger release process ([2e8a4fc](https://github.com/V-Sekai-fire/VRM-Addon-for-Blender/commit/2e8a4fc7af826e308d4dca68db313fd4fb317622))
+* trigger release workflow ([82c2c68](https://github.com/V-Sekai-fire/VRM-Addon-for-Blender/commit/82c2c68207a01ab4a9d9ae37d6aa2632031b111e))
+* trigger release workflow ([5aa88dc](https://github.com/V-Sekai-fire/VRM-Addon-for-Blender/commit/5aa88dc095fefab5d1541bb3cb8772d819bdf0ec))
+
 ## [3.13.3](https://github.com/saturday06/VRM-Addon-for-Blender/compare/v3.13.2...v3.13.3) (2025-09-14)
 
 
