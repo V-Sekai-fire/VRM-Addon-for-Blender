@@ -1,0 +1,12 @@
+; DO NOT EDIT (unless you know what you are doing)
+;
+; This subdirectory is a git "subrepo", and this file is maintained by the
+; git-subrepo command. See https://github.com/ingydotnet/git-subrepo#readme
+;
+[subrepo]
+	remote = https://github.com/fire/glTF.git
+	branch = bmesh
+	commit = 8c9ffcc5052cedd63456fc6f43dcd71e80bce73f
+	parent = 96068e54da31b156613667ae28d8702d7b7fbd8f
+	method = merge
+	cmdver = 0.4.9
