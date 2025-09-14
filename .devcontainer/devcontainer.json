@@ -1,0 +1,32 @@
+{
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "remoteUser": "developer",
+  "onCreateCommand": "./tools/devcontainer_on_create_command.sh",
+  "updateContentCommand": "./tools/devcontainer_update_content_command.sh",
+  "postAttachCommand": "./tools/devcontainer_post_attach_command.sh",
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:2": {}
+  },
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "python.testing.unittestArgs": ["-v", "-s", ".", "-p", "test_*.py"],
+        "python.defaultInterpreterPath": "./.venv/bin/python",
+        "python.testing.pytestEnabled": false,
+        "python.testing.unittestEnabled": true,
+        "terminal.integrated.scrollback": 50000
+      },
+      "extensions": [
+        "EditorConfig.EditorConfig",
+        "cesium.gltf-vscode",
+        "charliermarsh.ruff",
+        "ms-azuretools.vscode-docker",
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-vscode.powershell"
+      ]
+    }
+  }
+}

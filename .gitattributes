@@ -1,0 +1,35 @@
+* -text
+*.bat text eol=crlf
+*.cs text eol=lf
+*.css text eol=lf
+*.dockerfile text eol=lf
+*.glsl text eol=lf
+*.ini text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.py text eol=lf
+*.pyi text eol=lf
+*.rb text eol=lf
+*.toml text eol=lf
+*.txt text eol=lf
+*.html text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+.* text eol=lf
+go.mod text eol=lf
+go.sum text eol=lf
+uv.lock text eol=lf
+
+/tests/resources/unity/**/*.asset text eol=lf
+/tests/resources/unity/**/*.meta text eol=lf
+/tests/resources/unity/**/*.unity text eol=lf
+/tests/resources/unity/**/*.asmdef text eol=lf
+/tests/resources/unity/**/csc.rsp text eol=lf
+/tests/resources/unity/**/Directory.Build.props text eol=crlf
+
+# 昔はGitHubの "Code" -> "Download ZIP" からダウンロードしたファイルをアドオンとして扱う方式を採用していたが、現在は廃止している。
+# しかし、その昔の廃止した方式でダウンロードしてしまい、結果アドオンがうまく動かないという報告が多数あがって来てしまった。
+# デフォルトでユーザーが閲覧するREADMEブランチに関しては対策をしたが、他のmainブランチなどではできていない。
+# 対策ができていないブランチでの混乱を最小化するため、アーカイブする場合はソースコードをすべて除外しNotice.txtだけを含め、正しいダウンロード先を案内する。
+* export-ignore
+/Notice.txt -export-ignore
