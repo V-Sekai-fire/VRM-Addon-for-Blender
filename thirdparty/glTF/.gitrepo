@@ -6,7 +6,7 @@
 [subrepo]
 	remote = https://github.com/fire/glTF.git
 	branch = bmesh
-	commit = 8c9ffcc5052cedd63456fc6f43dcd71e80bce73f
-	parent = 96068e54da31b156613667ae28d8702d7b7fbd8f
+	commit = 2fc894a6a44991d7436aa86bf23b3ff8ba57905e
+	parent = 4be0310d0cac1f7dd8e6085e7ab61642b80dc51f
 	method = merge
 	cmdver = 0.4.9

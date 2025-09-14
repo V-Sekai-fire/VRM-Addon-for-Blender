@@ -52,9 +52,7 @@ This approach follows BMesh philosophy by storing subdivision data as attributes
 
 ### Buffer-Based Storage
 
-- **High Performance**: All BMesh data stored in binary buffers for optimal memory usage
 - **glTF 2.0 Compliance**: Follows standard glTF buffer view and accessor patterns
-- **Scalable**: Efficient for meshes of any size
 - **Standard Attributes**: Uses glTF 2.0 attribute naming conventions (TEXCOORD_0, etc.)
 - **Non-manifold Support**: Complete support for non-manifold edges and vertices
 
@@ -62,13 +60,13 @@ This approach follows BMesh philosophy by storing subdivision data as attributes
 
 The EXT_mesh_bmesh extension integrates seamlessly into glTF 2.0 primitives, storing complete BMesh topology in buffer views for optimal performance. Below is the maximal data structure showing all possible features, including OpenSubdiv subdivision surface attributes.
 
-### Maximal glTF Example with EXT_mesh_bmesh
+### glTF Example with EXT_mesh_bmesh
 
 ```json
 {
   "asset": {
     "version": "2.0",
-    "generator": "EXT_mesh_bmesh maximal example"
+    "generator": "EXT_mesh_bmesh example"
   },
   "scene": 0,
   "scenes": [
@@ -172,7 +170,7 @@ The EXT_mesh_bmesh extension integrates seamlessly into glTF 2.0 primitives, sto
 
 **Complete BMesh Topology:**
 
-- Full SOA (Struct of Arrays) topology storage for vertices, edges, loops, faces
+- Full topology storage for vertices, edges, loops, faces
 - Variable-length arrays with offset indexing for face connectivity
 - Non-manifold support via manifold flags and radial navigation
 
@@ -202,13 +200,6 @@ Like FB_ngon_encoding, the **order of triangles and per-triangle vertex indices*
 2. Triangle Fan Creation: Generate triangle fans anchored at selected vertices
 3. glTF Triangle Output: Output triangles in fan order for implicit reconstruction
 
-#### Buffer-Based SOA
-
-1. BMesh Analysis: Extract vertices, edges, loops, and faces from BMesh
-2. SOA Buffer Creation: Create 7 separate topology buffers for loops
-3. Variable-Length Encoding: Encode face vertex/edge/loop arrays with offsets
-4. Buffer View Assignment: Assign all data to glTF buffer views
-
 ### Reconstruction Process
 
 #### Implicit Layer
@@ -217,13 +208,6 @@ Like FB_ngon_encoding, the **order of triangles and per-triangle vertex indices*
 2. Face Reconstruction: Rebuild original faces from triangle fans
 3. Topology Derivation: Derive edge and loop relationships from face data
 4. Consistency Check: Verify topological integrity of reconstructed mesh
-
-#### Buffer-Based SOA
-
-1. Buffer Reading: Read SOA topology buffers from glTF buffer views
-2. BMesh Construction: Reconstruct vertices, edges, loops, faces from buffers
-3. Topology Linking: Restore all navigation pointers and relationships
-4. Attribute Assignment: Apply stored attributes to all topology elements
 
 ## Buffer Layouts
 
@@ -374,7 +358,7 @@ function decodeBmeshFromBuffers(gltfData) {
     bmesh.edges.set(i, edge);
   }
 
-  // Reconstruct loops from SOA buffer data
+  // Reconstruct loops from buffer data
   const loopVertex = readBufferView(
     buffers,
     bufferViews,
