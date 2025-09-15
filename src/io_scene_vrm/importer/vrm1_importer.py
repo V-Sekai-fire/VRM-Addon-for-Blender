@@ -57,6 +57,7 @@ from ..editor.vrm1.property_group import (
     Vrm1MetaPropertyGroup,
 )
 from .abstract_base_vrm_importer import AbstractBaseVrmImporter
+from .ext_mesh_bmesh_importer import ExtMeshBmeshImporter
 
 logger = get_logger(__name__)
 
@@ -937,6 +938,9 @@ class Vrm1Importer(AbstractBaseVrmImporter):
             self.load_spring_bone1(
                 addon_extension.spring_bone1, extensions_dict.get("VRMC_springBone")
             )
+
+        # Process EXT_mesh_bmesh extensions
+        self.load_ext_mesh_bmesh()
 
         self.load_node_constraint1()
         migration.migrate(self.context, armature.name)

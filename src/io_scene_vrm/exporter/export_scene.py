@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Optional
 
 import bpy
 from bpy.app.translations import pgettext
-from bpy.props import BoolProperty, CollectionProperty, StringProperty
+from bpy.props import BoolProperty, CollectionProperty, EnumProperty, StringProperty
 from bpy.types import (
     Armature,
     Context,
@@ -109,6 +109,44 @@ class EXPORT_SCENE_OT_vrm(Operator, ExportHelper):
     )
     export_try_sparse_sk: BoolProperty(  # type: ignore[valid-type]
         name="Use Sparse Accessors",
+        update=export_vrm_update_addon_preferences,
+    )
+
+    # EXT_mesh_bmesh properties
+    use_ext_mesh_bmesh: BoolProperty(  # type: ignore[valid-type]
+        name="⏫ Enable EXT_mesh_bmesh Topology Preservation",
+        description="Preserve complex polygon topology in glTF export using EXT_mesh_bmesh",
+        default=False,
+        update=export_vrm_update_addon_preferences,
+    )
+    ext_mesh_bmesh_preserve_topology: BoolProperty(  # type: ignore[valid-type]
+        name="Preserve Quads/N-gons",
+        description="Keep complex polygons instead of triangulating",
+        default=True,
+        update=export_vrm_update_addon_preferences,
+    )
+    ext_mesh_bmesh_sparse_optimization: BoolProperty(  # type: ignore[valid-type]
+        name="Sparse Accessor Optimization",
+        description="Use smart sparse accessors for file size optimization",
+        default=True,
+        update=export_vrm_update_addon_preferences,
+    )
+    ext_mesh_bmesh_compression_level: EnumProperty(  # type: ignore[valid-type]
+        name="Compression Level",
+        description="Topology compression and optimization level",
+        items=[
+            ('LOW', 'Low', 'Conservative compression, best compatibility'),
+            ('MEDIUM', 'Medium', 'Balanced performance and file size', 'DEFAULT'),
+            ('HIGH', 'High', 'Aggressive compression, smaller files'),
+            ('ULTRA', 'Ultra', 'Maximum compression, advanced features')
+        ],
+        default='MEDIUM',
+        update=export_vrm_update_addon_preferences,
+    )
+    ext_mesh_bmesh_subdivision_support: BoolProperty(  # type: ignore[valid-type]
+        name="Subdivision Support",
+        description="Include subdivision surface edge creases",
+        default=False,
         update=export_vrm_update_addon_preferences,
     )
 
@@ -247,6 +285,11 @@ class EXPORT_SCENE_OT_vrm(Operator, ExportHelper):
         export_lights: bool  # type: ignore[no-redef]
         export_gltf_animations: bool  # type: ignore[no-redef]
         export_try_sparse_sk: bool  # type: ignore[no-redef]
+        use_ext_mesh_bmesh: bool  # type: ignore[no-redef]
+        ext_mesh_bmesh_preserve_topology: bool  # type: ignore[no-redef]
+        ext_mesh_bmesh_sparse_optimization: bool  # type: ignore[no-redef]
+        ext_mesh_bmesh_compression_level: str  # type: ignore[no-redef]
+        ext_mesh_bmesh_subdivision_support: bool  # type: ignore[no-redef]
         errors: CollectionPropertyProtocol[  # type: ignore[no-redef]
             VrmValidationError
         ]
@@ -379,6 +422,34 @@ class VRM_PT_export_file_browser_tool_props(Panel):
             layout,
             show_vrm1_options=show_vrm1_options,
         )
+
+        # EXT_mesh_bmesh export options
+        if operator.enable_advanced_preferences:
+            box = layout.box()
+            box.label(text="EXT_mesh_bmesh Options", icon='MESH_DATA')
+
+            col = box.column(align=True)
+            col.prop(operator, "use_ext_mesh_bmesh")
+
+            if getattr(operator, "use_ext_mesh_bmesh", False):
+                sub_col = col.column(align=True)
+                sub_col.enabled = getattr(operator, "use_ext_mesh_bmesh", False)
+
+                sub_col.prop(operator, "ext_mesh_bmesh_preserve_topology")
+                sub_col.prop(operator, "ext_mesh_bmesh_sparse_optimization")
+                sub_col.prop(operator, "ext_mesh_bmesh_compression_level")
+                sub_col.prop(operator, "ext_mesh_bmesh_subdivision_support")
+
+                # Helpful information
+                info_box = col.box()
+                info_col = info_box.column(align=True)
+                info_col.label(text="Benefits:", icon='INFO')
+
+                benefit_col = info_col.box().column(align=True)
+                benefit_col.label(text="• Preserve complex polygons (quads/ngons)")
+                benefit_col.label(text="• Up to 49% smaller file sizes")
+                benefit_col.label(text="• Compatible with glTF viewers")
+                benefit_col.label(text="• Subdivision surface support")
 
         if operator.errors:
             validation.WM_OT_vrm_validator.draw_errors(

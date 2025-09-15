@@ -79,6 +79,7 @@ from .abstract_base_vrm_exporter import (
     assign_dict,
     force_apply_modifiers,
 )
+from .ext_mesh_bmesh_exporter import ExtMeshBmeshExporter
 
 logger = get_logger(__name__)
 
@@ -3095,6 +3096,49 @@ class Vrm1Exporter(AbstractBaseVrmExporter):
                 json_dict.pop(key, None)
 
         return pack_glb(json_dict, buffer0)
+
+    def export_ext_mesh_bmesh(
+        self, json_dict: dict[str, Json], buffer0: bytearray, mesh_object_name_to_node_index_dict: Mapping[str, int]
+    ) -> None:
+        """Export EXT_mesh_bmesh extensions to primitives."""
+        bmesh_exporter = ExtMeshBmeshExporter()
+
+        mesh_dicts = json_dict.get("meshes")
+        if not isinstance(mesh_dicts, list):
+            return
+
+        for mesh_dict in mesh_dicts:
+            if not isinstance(mesh_dict, dict):
+                continue
+
+            mesh_name = mesh_dict.get("name", "Mesh")
+            primitives = mesh_dict.get("primitives", [])
+
+            for primitive_index, primitive in enumerate(primitives):
+                if not isinstance(primitive, dict):
+                    continue
+
+                # Check if primitive can be exported with EXT_mesh_bmesh
+                mesh_object_name = None
+                for obj_name, node_index in mesh_object_name_to_node_index_dict.items():
+                    if mesh_dict.get("name") and mesh_dict.get("name") in obj_name:
+                        mesh_object_name = obj_name
+                        break
+
+                if mesh_object_name and bmesh_exporter.should_export(primitive):
+                    primitive_name = f"{mesh_name}_primitive_{primitive_index}"
+
+                    # Export with EXT_mesh_bmesh
+                    bmesh_exporter.export_primitive(
+                        primitive,
+                        json_dict,
+                        buffer0,
+                        primitive_name
+                    )
+
+                    logger.info("Exported EXT_mesh_bmesh primitive: %s", primitive_name)
+                else:
+                    logger.debug("Skipping non-EXT_mesh_bmesh compatible primitive: %s", primitive_name)
 
 
 def find_node_world_matrix(
